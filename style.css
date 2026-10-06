@@ -205,34 +205,75 @@ body{
 .combo-btn__name{ font-weight: 700; font-size: 13.5px; line-height: 1.25; }
 .combo-btn__price{ font-family: var(--font-display); font-size: 15px; color: var(--gold); }
 
+.pos-menu{
+  display: flex;
+  flex-direction: column;
+}
+
+.record-card{
+  background: rgba(17, 18, 27, 0.7);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: clamp(18px, 2vw, 24px);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+}
+
+.panel__head--compact{
+  margin-bottom: 14px;
+}
+
+.panel__head--compact h2{
+  margin: 0 0 6px;
+  font-size: clamp(20px, 2vw, 28px);
+  line-height: 1.1;
+}
+
+.panel__head--compact p{
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--text-dim);
+}
+
 .custom-row{
   display:grid;
   grid-template-columns: 1fr 90px 130px auto;
   gap: 10px;
-  margin-bottom: 4px;
+  margin: 0;
+  align-items: stretch;
 }
 .custom-row input{
-  background: var(--bg);
+  background: rgba(9, 10, 16, 0.9);
   border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 11px 12px;
+  border-radius: 10px;
+  padding: 12px 12px;
   color: var(--text);
   font-family: var(--font-body);
   font-size: 13.5px;
+  min-height: 46px;
 }
 .custom-row input::placeholder{ color: #6b6072; }
 .custom-row button{
   border: none;
-  border-radius: 8px;
+  border-radius: 10px;
   padding: 11px 18px;
-  background: var(--bg-panel-2);
+  background: linear-gradient(135deg, rgba(255, 123, 0, 0.2), rgba(255, 123, 0, 0.08));
   border: 1px solid var(--ember);
   color: var(--ember);
   font-weight: 700;
   font-size: 13.5px;
   cursor: pointer;
+  min-height: 46px;
 }
 .custom-row button:hover{ background: var(--ember); color: #1a0d0a; }
+
+@media (max-width: 760px){
+  .custom-row{
+    grid-template-columns: 1fr;
+  }
+  .custom-row button{
+    width: 100%;
+  }
+}
 
 .ticket{
   margin-top: 18px;

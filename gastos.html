@@ -44,16 +44,18 @@
 <main class="pos-wrap">
 
   <section class="pos-menu">
-    <div class="panel__head" style="margin-top: 0;">
-      <h2>Producto que no está en la lista</h2>
-      <p>Agrega cualquier otra cosa que hayas comprado.</p>
+    <div class="record-card">
+      <div class="panel__head panel__head--compact">
+        <h2>Registro de compras / gastos</h2>
+        <p>Agrega cualquier producto, insumo o gasto que no aparezca en la lista.</p>
+      </div>
+      <form class="custom-row" id="customForm">
+        <input type="text" id="customName" placeholder="Producto (ej. Cajas de servilletas)" required>
+        <input type="number" id="customQty" placeholder="Cant." min="1" value="1" required>
+        <input type="number" id="customPrice" placeholder="Precio &#8353;" min="0" step="1" required>
+        <button type="submit">Agregar</button>
+      </form>
     </div>
-    <form class="custom-row" id="customForm">
-      <input type="text" id="customName" placeholder="Producto (ej. Cajas de servilletas)" required>
-      <input type="number" id="customQty" placeholder="Cant." min="1" value="1" required>
-      <input type="number" id="customPrice" placeholder="Precio &#8353;" min="0" step="1" required>
-      <button type="submit">Agregar</button>
-    </form>
   </section>
 
   <aside class="pos-cart">
