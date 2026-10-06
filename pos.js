@@ -194,9 +194,9 @@
     const now = new Date();
     document.getElementById("tkNombre").textContent = NEGOCIO.nombre;
     document.getElementById("tkFecha").textContent = now.toLocaleDateString("es-CR", {
-      timeZone: "America/Costa_Rica", day: "2-digit", month: "2-digit", year: "numeric"
+      day: "2-digit", month: "2-digit", year: "numeric"
     }) + " " + now.toLocaleTimeString("es-CR", {
-      timeZone: "America/Costa_Rica", hour: "2-digit", minute: "2-digit", hourCycle: "h23"
+      hour: "2-digit", minute: "2-digit", hourCycle: "h23"
     });
     document.getElementById("tkNumero").textContent = "FACTURA SIMPLIFICADA: " + nextInvoiceNumber();
     document.getElementById("tkCedula").textContent = NEGOCIO.cedula;

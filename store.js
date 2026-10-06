@@ -130,18 +130,46 @@ window.VV = (function(){
   const CRC = n => "\u20a1" + Math.round(n).toLocaleString("es-CR");
 
   const pad2 = n => String(n).padStart(2, "0");
-  const BUSINESS_TIME_ZONE = "America/Costa_Rica";
   const todayKey = () => {
-    const parts = new Intl.DateTimeFormat("en-CA", {
-      timeZone: BUSINESS_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit"
-    }).formatToParts(new Date());
-    const part = type => parts.find(item => item.type === type).value;
-    return part("year") + "-" + pad2(part("month")) + "-" + pad2(part("day"));
+    const now = new Date();
+    return now.getFullYear() + "-" + pad2(now.getMonth() + 1) + "-" + pad2(now.getDate());
   };
   const monthKey = dateStr => dateStr.slice(0, 7);
-  const businessYear = () => Number(new Intl.DateTimeFormat("en-US", {
-    timeZone: BUSINESS_TIME_ZONE, year: "numeric"
-  }).format(new Date()));
+  const businessYear = () => new Date().getFullYear();
+
+  function readJSON(key, fallback){
+    try{
+      const raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : fallback;
+    }catch(err){
+      console.warn("No se pudieron leer los datos guardados:", key, err);
+      return fallback;
+    }
+  }
+
+  function newId(){
+    if(window.crypto && typeof window.crypto.randomUUID === "function") return window.crypto.randomUUID();
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, char => {
+      const random = Math.random() * 16 | 0;
+      return (char === "x" ? random : (random & 3 | 8)).toString(16);
+    });
+  }
+
+  function createOpenDay(now){
+    const openedAt = now || Date.now();
+    return { id: newId(), businessDate: todayKey(), openedAt };
+  }
+
+  function getOpenDay(){
+    const stored = readJSON("vv_openDay", null);
+    if(stored && stored.id && /^\d{4}-\d{2}-\d{2}$/.test(stored.businessDate) && stored.openedAt){
+      return stored;
+    }
+    const openDay = createOpenDay();
+    localStorage.setItem("vv_openDay", JSON.stringify(openDay));
+    scheduleCloudPush();
+    return openDay;
+  }
 
   /* =========================================================
      LOGIN (acceso con usuario y contraseña)
@@ -227,18 +255,35 @@ window.VV = (function(){
       vv_archive: localStorage.getItem("vv_archive"),
       vv_expense_day: localStorage.getItem("vv_expense_day"),
       vv_expense_archive: localStorage.getItem("vv_expense_archive"),
+      vv_openDay: localStorage.getItem("vv_openDay"),
+      vv_closures: localStorage.getItem("vv_closures"),
       vv_invoice_seq: localStorage.getItem("vv_invoice_seq_" + businessYear())
     };
   }
 
   function applyCloudState(remote){
-    ["vv_day_sales","vv_archive","vv_expense_day","vv_expense_archive"].forEach(k => {
+    ["vv_day_sales","vv_archive","vv_expense_day","vv_expense_archive","vv_openDay","vv_closures"].forEach(k => {
       if(remote[k] !== undefined && remote[k] !== null) localStorage.setItem(k, remote[k]);
     });
     if(remote.vv_invoice_seq !== undefined && remote.vv_invoice_seq !== null){
       localStorage.setItem("vv_invoice_seq_" + businessYear(), remote.vv_invoice_seq);
     }
     localStorage.setItem("vv_updated_at", String(remote.updatedAt || Date.now()));
+    if(hasUnmigratedRecords()){
+      localStorage.removeItem("vv_day_migration_v1");
+      migrateRecords();
+    }
+  }
+
+  function hasUnmigratedRecords(){
+    const storedRecords = [
+      readJSON("vv_archive", []),
+      readJSON("vv_expense_archive", []),
+      (readJSON("vv_day_sales", {}) || {}).items || [],
+      (readJSON("vv_expense_day", {}) || {}).items || []
+    ];
+    return storedRecords.some(records => Array.isArray(records)
+      && records.some(item => !item || !item.dayId || !item.businessDate));
   }
 
   // Agrupa varias escrituras seguidas (ej. varias líneas de un carrito) en un solo envío a la nube.
@@ -257,42 +302,38 @@ window.VV = (function(){
 
   /* ---------- Ventas del día / archivo mensual ---------- */
   function loadDay(){
-    let raw = localStorage.getItem("vv_day_sales");
-    let day = raw ? JSON.parse(raw) : null;
-    if(!day || day.date !== todayKey()){
-      if(day && day.items && day.items.length){ archiveItems(day.date, day.items); }
-      day = { date: todayKey(), items: [] };
-      saveDay(day);
-    }
-    return day;
+    const openDay = getOpenDay();
+    const stored = readJSON("vv_day_sales", null) || {};
+    const items = Array.isArray(stored.items) ? stored.items : [];
+    return { date: openDay.businessDate, dayId: openDay.id, items: items.filter(item => item.dayId === openDay.id) };
   }
   function saveDay(day){ localStorage.setItem("vv_day_sales", JSON.stringify(day)); scheduleCloudPush(); }
 
   function loadArchive(){
-    let raw = localStorage.getItem("vv_archive");
-    return raw ? JSON.parse(raw) : [];
+    const archive = readJSON("vv_archive", []);
+    return Array.isArray(archive) ? archive : [];
+  }
+  function getOpenDaySales(){
+    const dayId = getOpenDay().id;
+    return loadArchive().filter(item => item.dayId === dayId).concat(loadDay().items);
   }
   function saveArchive(arr){ localStorage.setItem("vv_archive", JSON.stringify(arr)); scheduleCloudPush(); }
 
   function archiveItems(date, items){
     const arch = loadArchive();
-    items.forEach(it => arch.push({
-      date, time: it.time || "", createdAt: it.createdAt || "",
-      paymentMethod: it.paymentMethod || "unknown",
-      product: it.product, qty: it.qty, total: it.total
-    }));
+    items.forEach(it => arch.push({ ...it, date: it.businessDate || date }));
     saveArchive(arch);
   }
 
   function getMonthRows(day){
-    const mKey = monthKey(todayKey());
+    const mKey = monthKey(getOpenDay().businessDate);
     const map = new Map();
-    loadArchive().filter(r => monthKey(r.date) === mKey).forEach(r => {
+    loadArchive().filter(r => r.businessDate && monthKey(r.businessDate) === mKey).forEach(r => {
       const cur = map.get(r.product) || { product: r.product, qty: 0, total: 0 };
       cur.qty += r.qty; cur.total += r.total;
       map.set(r.product, cur);
     });
-    day.items.forEach(r => {
+    day.items.filter(r => r.businessDate && monthKey(r.businessDate) === mKey).forEach(r => {
       const cur = map.get(r.product) || { product: r.product, qty: 0, total: 0 };
       cur.qty += r.qty; cur.total += r.total;
       map.set(r.product, cur);
@@ -317,12 +358,14 @@ window.VV = (function(){
     }
     const day = loadDay();
     const now = new Date();
+    const openDay = getOpenDay();
     const hora = now.toLocaleTimeString("es-CR", {
-      timeZone: BUSINESS_TIME_ZONE, hour: "2-digit", minute: "2-digit", hourCycle: "h23"
+      hour: "2-digit", minute: "2-digit", hourCycle: "h23"
     });
     cartLines.forEach(item => {
       day.items.push({
-        time: hora, createdAt: now.toISOString(), paymentMethod,
+        time: hora, ts: now.getTime(), createdAt: now.toISOString(), dayId: openDay.id,
+        businessDate: openDay.businessDate, paymentMethod,
         product: item.name, qty: item.qty, unit: item.price, total: item.qty * item.price
       });
     });
@@ -332,38 +375,38 @@ window.VV = (function(){
 
   /* ---------- Gastos / compras de insumos (independiente de las ventas) ---------- */
   function loadExpenseDay(){
-    let raw = localStorage.getItem("vv_expense_day");
-    let day = raw ? JSON.parse(raw) : null;
-    if(!day || day.date !== todayKey()){
-      if(day && day.items && day.items.length){ archiveExpenseItems(day.date, day.items); }
-      day = { date: todayKey(), items: [] };
-      saveExpenseDay(day);
-    }
-    return day;
+    const openDay = getOpenDay();
+    const stored = readJSON("vv_expense_day", null) || {};
+    const items = Array.isArray(stored.items) ? stored.items : [];
+    return { date: openDay.businessDate, dayId: openDay.id, items: items.filter(item => item.dayId === openDay.id) };
   }
   function saveExpenseDay(day){ localStorage.setItem("vv_expense_day", JSON.stringify(day)); scheduleCloudPush(); }
 
   function loadExpenseArchive(){
-    let raw = localStorage.getItem("vv_expense_archive");
-    return raw ? JSON.parse(raw) : [];
+    const archive = readJSON("vv_expense_archive", []);
+    return Array.isArray(archive) ? archive : [];
+  }
+  function getOpenDayExpenses(){
+    const dayId = getOpenDay().id;
+    return loadExpenseArchive().filter(item => item.dayId === dayId).concat(loadExpenseDay().items);
   }
   function saveExpenseArchive(arr){ localStorage.setItem("vv_expense_archive", JSON.stringify(arr)); scheduleCloudPush(); }
 
   function archiveExpenseItems(date, items){
     const arch = loadExpenseArchive();
-    items.forEach(it => arch.push({ date, product: it.product, qty: it.qty, total: it.total }));
+    items.forEach(it => arch.push({ ...it, date: it.businessDate || date }));
     saveExpenseArchive(arch);
   }
 
   function getExpenseMonthRows(day){
-    const mKey = monthKey(todayKey());
+    const mKey = monthKey(getOpenDay().businessDate);
     const map = new Map();
-    loadExpenseArchive().filter(r => monthKey(r.date) === mKey).forEach(r => {
+    loadExpenseArchive().filter(r => r.businessDate && monthKey(r.businessDate) === mKey).forEach(r => {
       const cur = map.get(r.product) || { product: r.product, qty: 0, total: 0 };
       cur.qty += r.qty; cur.total += r.total;
       map.set(r.product, cur);
     });
-    day.items.forEach(r => {
+    day.items.filter(r => r.businessDate && monthKey(r.businessDate) === mKey).forEach(r => {
       const cur = map.get(r.product) || { product: r.product, qty: 0, total: 0 };
       cur.qty += r.qty; cur.total += r.total;
       map.set(r.product, cur);
@@ -374,23 +417,94 @@ window.VV = (function(){
   function registerExpense(lines){
     const day = loadExpenseDay();
     const now = new Date();
+    const openDay = getOpenDay();
     const hora = now.toLocaleTimeString("es-CR", {
-      timeZone: BUSINESS_TIME_ZONE, hour: "2-digit", minute: "2-digit", hourCycle: "h23"
+      hour: "2-digit", minute: "2-digit", hourCycle: "h23"
     });
     lines.forEach(item => {
-      day.items.push({ time: hora, product: item.name, qty: item.qty, unit: item.price, total: item.qty * item.price });
+      day.items.push({
+        time: hora, ts: now.getTime(), dayId: openDay.id, businessDate: openDay.businessDate,
+        product: item.name, qty: item.qty, unit: item.price, total: item.qty * item.price
+      });
     });
     saveExpenseDay(day);
     return day;
   }
 
+  function localDateFromTimestamp(value){
+    const date = new Date(value);
+    if(Number.isNaN(date.getTime())) return "";
+    return date.getFullYear() + "-" + pad2(date.getMonth() + 1) + "-" + pad2(date.getDate());
+  }
+
+  function migrateRecords(){
+    if(localStorage.getItem("vv_day_migration_v1") === "1") return;
+    const openDay = getOpenDay();
+    const normalize = (item, fallbackDate) => {
+      const businessDate = item.businessDate || localDateFromTimestamp(item.ts || item.createdAt)
+        || (/^\d{4}-\d{2}-\d{2}$/.test(item.date || "") ? item.date : "")
+        || fallbackDate || openDay.businessDate;
+      return {
+        ...item,
+        date: businessDate,
+        businessDate,
+        dayId: item.dayId || (businessDate === openDay.businessDate ? openDay.id : "legacy-" + businessDate)
+      };
+    };
+    const sales = loadArchive().map(item => normalize(item, ""));
+    const salesDay = readJSON("vv_day_sales", {}) || {};
+    (Array.isArray(salesDay.items) ? salesDay.items : []).forEach(item => sales.push(normalize(item, salesDay.date)));
+    const expenses = loadExpenseArchive().map(item => normalize(item, ""));
+    const expensesDay = readJSON("vv_expense_day", {}) || {};
+    (Array.isArray(expensesDay.items) ? expensesDay.items : []).forEach(item => expenses.push(normalize(item, expensesDay.date)));
+    localStorage.setItem("vv_archive", JSON.stringify(sales));
+    localStorage.setItem("vv_day_sales", JSON.stringify({ date: openDay.businessDate, dayId: openDay.id, items: [] }));
+    localStorage.setItem("vv_expense_archive", JSON.stringify(expenses));
+    localStorage.setItem("vv_expense_day", JSON.stringify({ date: openDay.businessDate, dayId: openDay.id, items: [] }));
+    localStorage.setItem("vv_day_migration_v1", "1");
+    scheduleCloudPush();
+  }
+
+  function loadClosures(){
+    const closures = readJSON("vv_closures", []);
+    return Array.isArray(closures) ? closures : [];
+  }
+
+  function closeOpenDay(){
+    const openDay = getOpenDay();
+    const currentSales = loadDay().items;
+    const currentExpenses = loadExpenseDay().items;
+    const sales = getOpenDaySales();
+    const expenses = getOpenDayExpenses();
+    const now = Date.now();
+    const totalSales = sales.reduce((sum, item) => sum + (Number(item.total) || 0), 0);
+    const totalExpenses = expenses.reduce((sum, item) => sum + (Number(item.total) || 0), 0);
+    const closure = {
+      dayId: openDay.id, businessDate: openDay.businessDate, openedAt: openDay.openedAt,
+      closedAt: now, totalSales, totalExpenses, net: totalSales - totalExpenses,
+      dishes: sales.reduce((sum, item) => sum + (Number(item.qty) || 0), 0)
+    };
+    archiveItems(openDay.businessDate, currentSales);
+    archiveExpenseItems(openDay.businessDate, currentExpenses);
+    saveDay({ date: openDay.businessDate, dayId: openDay.id, items: [] });
+    saveExpenseDay({ date: openDay.businessDate, dayId: openDay.id, items: [] });
+    const closures = loadClosures();
+    closures.push(closure);
+    localStorage.setItem("vv_closures", JSON.stringify(closures));
+    localStorage.setItem("vv_openDay", JSON.stringify(createOpenDay(now)));
+    scheduleCloudPush();
+    return closure;
+  }
+
+  migrateRecords();
+
   return {
     NEGOCIO, PRODUCTS, CATEGORIES, SUPPLIES, CRC,
-    todayKey, monthKey,
-    loadDay, saveDay, loadArchive, saveArchive, archiveItems, getMonthRows,
+    todayKey, monthKey, getOpenDay,
+    loadDay, saveDay, loadArchive, saveArchive, archiveItems, getMonthRows, getOpenDaySales,
     nextInvoiceNumber, registerSale,
     loadExpenseDay, saveExpenseDay, loadExpenseArchive, saveExpenseArchive,
-    archiveExpenseItems, getExpenseMonthRows, registerExpense,
+    archiveExpenseItems, getExpenseMonthRows, registerExpense, getOpenDayExpenses, loadClosures, closeOpenDay,
     AUTH, initCloud, isCloudConfigured
   };
 })();

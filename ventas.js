@@ -1,22 +1,17 @@
 (function(){
   "use strict";
   const {
-    CRC, todayKey, monthKey, loadDay, saveDay, loadArchive, archiveItems, getMonthRows,
-    loadExpenseDay, getExpenseMonthRows
+    CRC, monthKey, getOpenDay, loadDay, getMonthRows, getOpenDaySales,
+    loadExpenseDay, getExpenseMonthRows, getOpenDayExpenses, closeOpenDay
   } = window.VV;
-  const BUSINESS_TIME_ZONE = "America/Costa_Rica";
 
   let day = loadDay();
 
   /* ---------- Reloj ---------- */
   function tickClock(){
     const now = new Date();
-    const fecha = now.toLocaleDateString("es-CR", {
-      timeZone: BUSINESS_TIME_ZONE, day: "2-digit", month: "2-digit", year: "numeric"
-    });
-    const hora = now.toLocaleTimeString("es-CR", {
-      timeZone: BUSINESS_TIME_ZONE, hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23"
-    });
+    const fecha = now.toLocaleDateString("es-CR", { day: "2-digit", month: "2-digit", year: "numeric" });
+    const hora = now.toLocaleTimeString("es-CR", { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
     document.getElementById("clockNow").textContent = fecha + " " + hora;
   }
   tickClock();
@@ -47,7 +42,7 @@
     const ventasMes = getMonthRows(day).reduce((s,r) => s + r.total, 0);
 
     const expenseDay = loadExpenseDay();
-    const gastosHoy = expenseDay.items.reduce((s,i) => s + i.total, 0);
+    const gastosHoy = getOpenDayExpenses().reduce((s,i) => s + i.total, 0);
     const gastosMes = getExpenseMonthRows(expenseDay).reduce((s,r) => s + r.total, 0);
 
     return {
@@ -57,14 +52,15 @@
   }
 
   function getTodaySales(){
-    return loadArchive().filter(item => item.date === todayKey()).concat(day.items);
+    return getOpenDaySales();
   }
 
   function getReportContext(){
     const now = new Date();
-    const month = monthKey(todayKey());
+    const openDay = getOpenDay();
+    const month = monthKey(openDay.businessDate);
     const monthSales = loadArchive()
-      .filter(item => item.date && monthKey(item.date) === month)
+      .filter(item => item.businessDate && monthKey(item.businessDate) === month)
       .concat(day.items);
     const sumPayments = sales => sales.reduce((totals, sale) => {
       const method = String(sale.paymentMethod || "").toLowerCase();
@@ -75,16 +71,12 @@
       return totals;
     }, { cash: 0, card: 0, unclassified: 0 });
     const hour = Number(new Intl.DateTimeFormat("en-US", {
-      timeZone: BUSINESS_TIME_ZONE, hour: "2-digit", hourCycle: "h23"
+      hour: "2-digit", hourCycle: "h23"
     }).format(now));
 
     return {
-      date: now.toLocaleDateString("es-CR", {
-        timeZone: BUSINESS_TIME_ZONE, day: "2-digit", month: "2-digit", year: "numeric"
-      }),
-      time: now.toLocaleTimeString("es-CR", {
-        timeZone: BUSINESS_TIME_ZONE, hour: "2-digit", minute: "2-digit", hourCycle: "h23"
-      }),
+      date: new Date(openDay.businessDate + "T00:00:00").toLocaleDateString("es-CR", { day: "2-digit", month: "2-digit", year: "numeric" }),
+      time: now.toLocaleTimeString("es-CR", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }),
       shift: hour >= 5 && hour < 12 ? "Mañana" : hour < 18 && hour >= 12 ? "Tarde" : "Noche",
       cashier: window.VV.AUTH.currentUser(),
       payments: {
@@ -111,6 +103,8 @@
   /* ---------- Render ---------- */
   function renderAll(){
     day = loadDay();
+    const openDay = getOpenDay();
+    document.getElementById("openDayInfo").textContent = "Turno abierto desde " + new Date(openDay.openedAt).toLocaleString("es-CR");
     const todaySales = getTodaySales();
     const ventasHoy = todaySales.reduce((s,i) => s + i.total, 0);
     const platosHoy = todaySales.reduce((s,i) => s + i.qty, 0);
@@ -142,16 +136,13 @@
     });
   }
 
-  /* ---------- Reiniciar día ---------- */
+  /* ---------- Cierre del día ---------- */
   document.getElementById("btnReset").addEventListener("click", () => {
-    if(day.items.length === 0){ toast("No hay ventas de hoy para cerrar."); return; }
-    const ok = confirm("Esto cerrará el día actual: las ventas de hoy pasan al consolidado mensual y la lista de hoy queda en cero. ¿Continuar?");
+    const ok = confirm("¿Cerrar el día? Las cifras de hoy volverán a ₡0. Lo registrado queda guardado.");
     if(!ok) return;
-    archiveItems(day.date, day.items);
-    day = { date: todayKey(), items: [] };
-    saveDay(day);
+    closeOpenDay();
     renderAll();
-    toast("Día cerrado y enviado al consolidado mensual.");
+    toast("Día cerrado correctamente.");
   });
 
   /* ---------- Exportar PDF ---------- */
@@ -166,6 +157,7 @@
     const gastosMes = f.gastosMes;
     const gananciaMes = f.gananciaMes;
     const report = getReportContext();
+    const salesToday = getTodaySales();
 
     const pageWidth = doc.internal.pageSize.getWidth();
     const pageHeight = doc.internal.pageSize.getHeight();
@@ -313,7 +305,28 @@
       doc.text(row.value, right - 4, y + 2, { align: "right" });
     });
 
-    doc.save(`volcano-vibes-reporte-${activeTab === "day" ? "dia" : "mes"}-${todayKey()}.pdf`);
+    doc.addPage();
+    doc.setTextColor(15, 20, 24);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(16);
+    doc.text("Ventas del turno abierto", left, 20);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(10);
+    doc.text(`Fecha de negocio: ${report.date}`, left, 27);
+    doc.autoTable({
+      head: [["Hora", "Producto", "Cantidad", "Total"]],
+      body: salesToday.map(sale => [sale.time || "", sale.product, String(sale.qty), CRC(sale.total)]),
+      startY: 34,
+      styles: { fontSize: 9 },
+      headStyles: { fillColor: [182, 56, 53] },
+      didDrawPage: () => {
+        doc.setFontSize(8);
+        doc.setTextColor(100, 100, 100);
+        doc.text("Volcano Vibes · Turno abierto", left, pageHeight - 8);
+      }
+    });
+
+    doc.save(`volcano-vibes-reporte-${activeTab === "day" ? "dia" : "mes"}-${getOpenDay().businessDate}.pdf`);
   });
 
   /* ---------- Exportar Excel ---------- */
@@ -325,6 +338,7 @@
     const gastosMes = f.gastosMes;
     const gananciaMes = f.gananciaMes;
     const report = getReportContext();
+    const salesToday = getTodaySales();
 
     const rows = [
       [window.VV.NEGOCIO.nombre, "", "", ""],
@@ -472,7 +486,18 @@
 
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Resumen ejecutivo");
-    XLSX.writeFile(wb, `volcano-vibes-resumen-${todayKey()}.xlsx`);
+    const turnRows = salesToday.map(sale => ({
+      Fecha: sale.businessDate,
+      Hora: sale.time || "",
+      Producto: sale.product,
+      Cantidad: sale.qty,
+      "Precio unitario": sale.unit || "",
+      Total: sale.total,
+      "Método de pago": sale.paymentMethod || ""
+    }));
+    const turnSheet = XLSX.utils.json_to_sheet(turnRows);
+    XLSX.utils.book_append_sheet(wb, turnSheet, "Ventas del turno");
+    XLSX.writeFile(wb, `volcano-vibes-resumen-${getOpenDay().businessDate}.xlsx`);
   });
 
   /* ---------- Toast ---------- */

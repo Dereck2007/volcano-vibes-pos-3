@@ -1,8 +1,8 @@
 (function(){
   "use strict";
   const {
-    SUPPLIES, CRC, todayKey,
-    loadExpenseDay, saveExpenseDay, archiveExpenseItems, getExpenseMonthRows, registerExpense
+    SUPPLIES, CRC, getOpenDay,
+    loadExpenseDay, getOpenDayExpenses, getExpenseMonthRows, registerExpense
   } = window.VV;
 
   let cart = []; // { name, qty, price }
@@ -120,8 +120,9 @@
   /* ---------- Reporte de gastos ---------- */
   function renderReport(){
     day = loadExpenseDay();
-    const gastosHoy = day.items.reduce((s,i) => s + i.total, 0);
-    const comprasHoy = day.items.reduce((s,i) => s + i.qty, 0);
+    const todayExpenses = getOpenDayExpenses();
+    const gastosHoy = todayExpenses.reduce((s,i) => s + i.total, 0);
+    const comprasHoy = todayExpenses.reduce((s,i) => s + i.qty, 0);
     const monthRows = getExpenseMonthRows(day);
     const totalMes = monthRows.reduce((s,r) => s + r.total, 0);
 
@@ -131,8 +132,8 @@
 
     const dayBody = document.querySelector("#tableDay tbody");
     dayBody.innerHTML = "";
-    document.getElementById("emptyDay").style.display = day.items.length ? "none" : "block";
-    [...day.items].reverse().forEach(it => {
+    document.getElementById("emptyDay").style.display = todayExpenses.length ? "none" : "block";
+    [...todayExpenses].reverse().forEach(it => {
       const tr = document.createElement("tr");
       tr.innerHTML = `<td>${it.time}</td><td>${it.product}</td><td class="num">${it.qty}</td><td class="num money">${CRC(it.total)}</td>`;
       dayBody.appendChild(tr);
@@ -148,18 +149,6 @@
     });
   }
 
-  /* ---------- Cerrar día ---------- */
-  document.getElementById("btnReset").addEventListener("click", () => {
-    if(day.items.length === 0){ toast("No hay gastos de hoy para cerrar."); return; }
-    const ok = confirm("Esto cerrará el día actual: los gastos de hoy pasan al consolidado mensual y la lista de hoy queda en cero. ¿Continuar?");
-    if(!ok) return;
-    archiveExpenseItems(day.date, day.items);
-    day = { date: todayKey(), items: [] };
-    saveExpenseDay(day);
-    renderReport();
-    toast("Día cerrado y enviado al consolidado mensual.");
-  });
-
   /* ---------- Exportar PDF ---------- */
   document.getElementById("btnPdf").addEventListener("click", () => {
     const { jsPDF } = window.jspdf;
@@ -167,10 +156,10 @@
     doc.setFontSize(16);
     doc.text("Volcano Vibes - Gastos", 14, 18);
     doc.setFontSize(10);
-    doc.text(new Date().toLocaleString("es-CR", { timeZone: "America/Costa_Rica" }), 14, 25);
+    doc.text(new Date().toLocaleString("es-CR"), 14, 25);
 
     const rows = activeTab === "day"
-      ? day.items.map(i => [i.time, i.product, String(i.qty), CRC(i.total)])
+      ? getOpenDayExpenses().map(i => [i.time, i.product, String(i.qty), CRC(i.total)])
       : getExpenseMonthRows(day).map(r => [r.product, String(r.qty), CRC(r.total)]);
     const head = activeTab === "day"
       ? [["Hora","Producto","Cant.","Total"]]
@@ -180,23 +169,23 @@
 
     const finalY = doc.lastAutoTable.finalY || 32;
     const totalGeneral = activeTab === "day"
-      ? day.items.reduce((s,i)=>s+i.total,0)
+      ? getOpenDayExpenses().reduce((s,i)=>s+i.total,0)
       : getExpenseMonthRows(day).reduce((s,r)=>s+r.total,0);
     doc.setFontSize(11);
     doc.text(`Total: ${CRC(totalGeneral)}`, 14, finalY + 10);
 
-    doc.save(`volcano-vibes-gastos-${activeTab === "day" ? "dia" : "mes"}-${todayKey()}.pdf`);
+    doc.save(`volcano-vibes-gastos-${activeTab === "day" ? "dia" : "mes"}-${getOpenDay().businessDate}.pdf`);
   });
 
   /* ---------- Exportar Excel ---------- */
   document.getElementById("btnXlsx").addEventListener("click", () => {
     const rows = activeTab === "day"
-      ? day.items.map(i => ({ Hora: i.time, Producto: i.product, Cantidad: i.qty, Total: i.total }))
+      ? getOpenDayExpenses().map(i => ({ Hora: i.time, Producto: i.product, Cantidad: i.qty, Total: i.total }))
       : getExpenseMonthRows(day).map(r => ({ Producto: r.product, Cantidad: r.qty, "Total acumulado": r.total }));
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, activeTab === "day" ? "Gastos del dia" : "Consolidado mes");
-    XLSX.writeFile(wb, `volcano-vibes-gastos-${activeTab === "day" ? "dia" : "mes"}-${todayKey()}.xlsx`);
+    XLSX.writeFile(wb, `volcano-vibes-gastos-${activeTab === "day" ? "dia" : "mes"}-${getOpenDay().businessDate}.xlsx`);
   });
 
   /* ---------- Toast ---------- */
