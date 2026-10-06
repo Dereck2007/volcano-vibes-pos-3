@@ -370,8 +370,8 @@ td.money{ color: var(--gold); font-weight: 700; }
 }
 .btn--pdf{ background: linear-gradient(120deg, #E63946, #B4222E); color: #fff; }
 .btn--xlsx{ background: linear-gradient(120deg, #2FAE6B, #1E7A4C); color: #fff; }
-.btn--reset{ background: var(--bg-panel-2); border: 1px solid var(--line); color: var(--text-dim); }
-.btn--reset:hover{ color: var(--text); border-color: var(--ember); }
+.btn--close-day{ background: var(--bg-panel-2); border: 1px solid var(--line); color: var(--text-dim); }
+.btn--close-day:hover{ color: var(--text); border-color: var(--ember); }
 .powered{
   margin-left: auto;
   font-size: 11.5px;

@@ -137,7 +137,7 @@
   }
 
   /* ---------- Cierre del día ---------- */
-  document.getElementById("btnReset").addEventListener("click", () => {
+  document.getElementById("btnCierreDia").addEventListener("click", () => {
     const ok = confirm("¿Cerrar el día? Las cifras de hoy volverán a ₡0. Lo registrado queda guardado.");
     if(!ok) return;
     closeOpenDay();

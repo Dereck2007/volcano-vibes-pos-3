@@ -14,7 +14,7 @@
 3. Ajusta cantidades o quita productos directamente en "Orden actual".
 4. Presiona **Cobrar e imprimir**: te pide el efectivo recibido, calcula el cambio y, al confirmar, abre el diálogo de impresión del navegador ya con la factura lista (formato tipo tiquete: encabezado del negocio, número de factura consecutivo, detalle, subtotal, IVA 13%, total, efectivo y cambio).
 5. Esa venta queda registrada automáticamente — ve a **Ventas y reportes** para verla en "Ventas de hoy" y en el consolidado mensual.
-6. **Reiniciar día** en reportes cierra el turno: las ventas del día pasan al consolidado mensual y la lista de hoy queda en cero.
+6. **Cierre del día** en reportes cierra el turno: las ventas del día pasan al consolidado mensual y la lista de hoy queda en cero.
 
 ## Cómo se resolvió el problema de la ventana en blanco
 En vez de abrir una ventana nueva (`window.open`) y escribirle el tiquete después —que es la causa típica del popup en blanco—, la factura vive **oculta dentro de la misma página** (`#printTicket`). Al cobrar, se llenan sus datos en el DOM (ya renderizados) y solo entonces se llama a `window.print()`. Una regla `@media print` oculta todo lo demás y muestra únicamente el tiquete, del ancho de una impresora térmica (78mm). No hay ventana emergente que pueda quedar a medio cargar.
