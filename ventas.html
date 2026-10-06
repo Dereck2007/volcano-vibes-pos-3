@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Volcano Vibes · Control de Ventas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Montserrat:wght@500;700;800&family=Oswald:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="store.js"></script>
+</head>
+<body>
+
+<div class="magma-glow magma-glow--tl"></div>
+<div class="magma-glow magma-glow--br"></div>
+
+<header class="topbar">
+  <div class="brand">
+    <svg class="brand__flame" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M24 4C24 4 15 14 15 23C15 28.5 18.5 31 21 31C21 28 19.5 25.5 21 22C21.8 27 26 27.5 26 32C26 34.5 24.5 36 24.5 36C24.5 36 33 32.5 33 22C33 15 27 12 27 7C27 5.5 27.5 4.5 27.5 4.5C27.5 4.5 24 4 24 4Z" fill="url(#flameGrad)"/>
+      <path d="M18 30C18 30 13 32.5 13 38C13 42 17 44 24 44C31 44 35 42 35 38C35 32.5 30 30 30 30C31 35 28.5 38 24 38C19.5 38 17 35 18 30Z" fill="url(#baseGrad)"/>
+      <defs>
+        <linearGradient id="flameGrad" x1="24" y1="4" x2="24" y2="36" gradientUnits="userSpaceOnUse">
+          <stop stop-color="#FFC93C"/>
+          <stop offset="0.5" stop-color="#FF6B1A"/>
+          <stop offset="1" stop-color="#FF3D7A"/>
+        </linearGradient>
+        <linearGradient id="baseGrad" x1="24" y1="30" x2="24" y2="44" gradientUnits="userSpaceOnUse">
+          <stop stop-color="#FF3D7A"/>
+          <stop offset="1" stop-color="#8E1F5A"/>
+        </linearGradient>
+      </defs>
+    </svg>
+    <div class="brand__text">
+      <h1>VOLCANO VIBES</h1>
+      <p>Control de ventas</p>
+    </div>
+  </div>
+  <nav class="pagenav">
+    <a href="index.html" class="pagenav__link">Punto de venta</a>
+    <a href="gastos.html" class="pagenav__link">Gastos</a>
+    <a href="ventas.html" class="pagenav__link pagenav__link--active">Ventas y reportes</a>
+    <button type="button" class="pagenav__logout" id="btnLogout">Cerrar sesión</button>
+  </nav>
+  <div class="clockbox">
+    <span id="clockNow">—</span>
+    <span class="currency-pill">Costa Rica <span class="colon">&#8353;</span></span>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <nav class="tabs" role="tablist">
+    <button class="tab tab--active" id="tabDay" role="tab" aria-selected="true">
+      <svg viewBox="0 0 20 20" fill="none"><path d="M4 8h12M6 3v3M14 3v3M4.5 5h11A1.5 1.5 0 0117 6.5v9A1.5 1.5 0 0115.5 17h-11A1.5 1.5 0 013 15.5v-9A1.5 1.5 0 014.5 5z" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      Control diario (hoy)
+    </button>
+    <button class="tab" id="tabMonth" role="tab" aria-selected="false">
+      <svg viewBox="0 0 20 20" fill="none"><path d="M10 2a8 8 0 108 8 6.5 6.5 0 01-6.5-6.5A8 8 0 0010 2z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M10 6v4l2.5 2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      Acumulado del mes
+    </button>
+  </nav>
+
+  <section class="stats">
+    <div class="stat stat--ember">
+      <span class="stat__label">Ventas de hoy</span>
+      <span class="stat__value" id="statVentasHoy">&#8353;0</span>
+    </div>
+    <div class="stat stat--gold">
+      <span class="stat__label">Platos vendidos</span>
+      <span class="stat__value" id="statPlatosHoy">0</span>
+    </div>
+    <div class="stat stat--lime">
+      <span class="stat__label" id="statTotalLabel">Total del mes</span>
+      <span class="stat__value" id="statTotalMes">&#8353;0</span>
+    </div>
+  </section>
+
+  <section class="panel panel--profit">
+    <div class="panel__head">
+      <h2><svg viewBox="0 0 20 20" fill="none" class="panel__icon"><path d="M3 15l4.5-5 3.5 3 6-7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg> Resumen financiero</h2>
+      <p>Ventas menos gastos registrados en <a href="gastos.html">Gastos</a>, para hoy y para el mes.</p>
+    </div>
+    <div class="profit-grid">
+      <div class="profit-col">
+        <span class="profit-col__label">Hoy</span>
+        <div class="profit-row"><span>Ventas</span><span id="pfVentasHoy">&#8353;0</span></div>
+        <div class="profit-row"><span>Gastos</span><span id="pfGastosHoy">&#8353;0</span></div>
+        <div class="profit-row profit-row--net"><span>Ganancia neta</span><span id="pfGananciaHoy">&#8353;0</span></div>
+      </div>
+      <div class="profit-col">
+        <span class="profit-col__label">Este mes</span>
+        <div class="profit-row"><span>Ventas</span><span id="pfVentasMes">&#8353;0</span></div>
+        <div class="profit-row"><span>Gastos</span><span id="pfGastosMes">&#8353;0</span></div>
+        <div class="profit-row profit-row--net"><span>Ganancia neta</span><span id="pfGananciaMes">&#8353;0</span></div>
+      </div>
+    </div>
+  </section>
+
+  <p class="hint-banner">Las ventas se registran desde la pantalla <a href="index.html">Punto de venta</a>. Aquí solo se consulta el reporte.</p>
+
+  <section class="panel" id="panelTablaDia">
+    <div class="panel__head">
+      <h2>Ventas de hoy</h2>
+      <p>Cada fila es una venta cobrada durante el turno actual.</p>
+    </div>
+    <div class="table-wrap">
+      <table id="tableDay">
+        <thead><tr><th>Hora</th><th>Producto</th><th>Cant.</th><th>Total</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <p class="empty-msg" id="emptyDay">Todavía no hay ventas registradas hoy.</p>
+    </div>
+  </section>
+
+  <section class="panel" id="panelHistorico">
+    <div class="panel__head">
+      <h2><svg viewBox="0 0 20 20" fill="none" class="panel__icon"><path d="M4 4h12v12H4z" stroke="currentColor" stroke-width="1.3"/><path d="M4 8h12M8 4v12" stroke="currentColor" stroke-width="1.3"/></svg> Histórico y consolidado mensual</h2>
+      <p id="histSub">A continuación se muestran todas las ventas agrupadas por producto durante el mes activo.</p>
+    </div>
+    <div class="table-wrap">
+      <table id="tableMonth">
+        <thead><tr><th>Producto</th><th>Cant.</th><th>Total acumulado</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <p class="empty-msg" id="emptyMonth">Todavía no hay ventas acumuladas este mes.</p>
+    </div>
+  </section>
+
+  <footer class="actionbar">
+    <button class="btn btn--pdf" id="btnPdf">
+      <svg viewBox="0 0 20 20" fill="none"><path d="M5 2h7l3 3v13H5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M12 2v3h3" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+      PDF
+    </button>
+    <button class="btn btn--xlsx" id="btnXlsx">
+      <svg viewBox="0 0 20 20" fill="none"><path d="M5 2h7l3 3v13H5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M12 2v3h3" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+      Excel (.xlsx)
+    </button>
+    <button class="btn btn--reset" id="btnReset">
+      <svg viewBox="0 0 20 20" fill="none"><path d="M15.5 6.5A6.5 6.5 0 104.9 12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M16 3v4h-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Reiniciar día
+    </button>
+    <span class="powered">Prototipo local &middot; los datos viven en este navegador</span>
+  </footer>
+
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<script src="ventas.js"></script>
+<script>
+  document.getElementById("btnLogout").addEventListener("click", function(){
+    window.VV.AUTH.logout();
+    location.href = "login.html";
+  });
+  window.VV.initCloud();
+</script>
+</body>
+</html>

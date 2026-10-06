@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Volcano Vibes · Iniciar sesión</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Montserrat:wght@500;700;800&family=Oswald:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="login-body">
+
+<div class="magma-glow magma-glow--tl"></div>
+<div class="magma-glow magma-glow--br"></div>
+
+<main class="login-wrap">
+  <div class="login-card">
+    <svg class="brand__flame" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:48px;height:48px;margin:0 auto 8px;display:block;">
+      <path d="M24 4C24 4 15 14 15 23C15 28.5 18.5 31 21 31C21 28 19.5 25.5 21 22C21.8 27 26 27.5 26 32C26 34.5 24.5 36 24.5 36C24.5 36 33 32.5 33 22C33 15 27 12 27 7C27 5.5 27.5 4.5 27.5 4.5C27.5 4.5 24 4 24 4Z" fill="url(#flameGrad)"/>
+      <path d="M18 30C18 30 13 32.5 13 38C13 42 17 44 24 44C31 44 35 42 35 38C35 32.5 30 30 30 30C31 35 28.5 38 24 38C19.5 38 17 35 18 30Z" fill="url(#baseGrad)"/>
+      <defs>
+        <linearGradient id="flameGrad" x1="24" y1="4" x2="24" y2="36" gradientUnits="userSpaceOnUse">
+          <stop stop-color="#FFC93C"/><stop offset="0.5" stop-color="#FF6B1A"/><stop offset="1" stop-color="#FF3D7A"/>
+        </linearGradient>
+        <linearGradient id="baseGrad" x1="24" y1="30" x2="24" y2="44" gradientUnits="userSpaceOnUse">
+          <stop stop-color="#FF3D7A"/><stop offset="1" stop-color="#8E1F5A"/>
+        </linearGradient>
+      </defs>
+    </svg>
+    <h1 class="login-title">VOLCANO VIBES</h1>
+    <p class="login-sub">Ingresa con la cuenta del negocio</p>
+
+    <form id="loginForm">
+      <label for="user">Usuario</label>
+      <input type="text" id="user" autocomplete="username" required>
+      <label for="pass">Contraseña</label>
+      <input type="password" id="pass" autocomplete="current-password" required>
+      <p class="login-error" id="loginError" hidden>Usuario o contraseña incorrectos.</p>
+      <button type="submit" class="btn btn--charge btn--full">Entrar</button>
+    </form>
+
+    <p class="login-hint">Usuario y contraseña por defecto: <strong>admin</strong> / <strong>admin</strong></p>
+  </div>
+</main>
+
+<script src="store.js"></script>
+<script>
+  document.getElementById("loginForm").addEventListener("submit", function(e){
+    e.preventDefault();
+    const user = document.getElementById("user").value.trim();
+    const pass = document.getElementById("pass").value;
+    if(window.VV.AUTH.login(user, pass)){
+      location.href = "index.html";
+    } else {
+      document.getElementById("loginError").hidden = false;
+    }
+  });
+  // Si ya inició sesión, no tiene sentido mostrarle el login otra vez.
+  if(window.VV.AUTH.isLoggedIn()){ location.href = "index.html"; }
+</script>
+</body>
+</html>
