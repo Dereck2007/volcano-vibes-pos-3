@@ -8,17 +8,6 @@
   let cart = []; // { name, qty, price }
   let day = loadExpenseDay();
 
-  /* ---------- Grid de insumos frecuentes ---------- */
-  const supplyGrid = document.getElementById("supplyGrid");
-  SUPPLIES.forEach(s => {
-    const card = document.createElement("button");
-    card.type = "button";
-    card.className = "product-card product-card--supply";
-    card.innerHTML = `<span class="product-card__supply-name">${s.name}</span><span class="product-card__add">+</span>`;
-    card.addEventListener("click", () => addToCart(s.name, 1, 0));
-    supplyGrid.appendChild(card);
-  });
-
   /* ---------- Carrito de la compra actual ---------- */
   const cartList = document.getElementById("cartList");
   const emptyCart = document.getElementById("emptyCart");
