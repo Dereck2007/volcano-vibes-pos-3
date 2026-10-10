@@ -59,7 +59,8 @@ window.VV = (function(){
     { id: "v4", cat: "ceviches", name: "Ceviche Camarón", desc: "Ceviches y Caldosas", price: 4950 },
     { id: "v5", cat: "ceviches", name: "Caldosa (Chica)", desc: "Ceviches y Caldosas", price: 500 },
     { id: "v6", cat: "ceviches", name: "Caldosa (Grande)", desc: "Ceviches y Caldosas", price: 1000 },
-    { id: "v7", cat: "ceviches", name: "Chichaldosa", desc: "Ceviches y Caldosas", price: 3950 },
+    { id: "v8", cat: "ceviches", name: "Chichaldosa (Chica)", desc: "Ceviches y Caldosas", price: 1950 },
+    { id: "v7", cat: "ceviches", name: "Chichaldosa (Grande)", desc: "Ceviches y Caldosas", price: 3950 },
 
     // Batidos y Bebidas
     { id: "d1", cat: "bebidas", name: "Mangonada", desc: "Batidos y Bebidas", price: 2650 },
