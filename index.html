@@ -60,8 +60,6 @@
     </div>
 
     <div class="pos-cart__totals">
-      <div class="row"><span>Subtotal (sin IVA)</span><span id="sumSubtotal">&#8353;0</span></div>
-      <div class="row"><span>IVA (13% incluido)</span><span id="sumIva">&#8353;0</span></div>
       <div class="row row--total"><span>Total</span><span id="sumTotal">&#8353;0</span></div>
     </div>
 
@@ -87,16 +85,6 @@
       </div>
       <div class="modal__actions">
         <button class="btn btn--ghost" id="btnCancelPayMethod" type="button">Cancelar</button>
-      </div>
-    </div>
-
-    <div id="cashPaymentSection" hidden>
-      <label for="cashInput">Efectivo recibido (&#8353;)</label>
-      <input type="number" id="cashInput" min="0" step="1" placeholder="Ej: 5000">
-      <p class="modal__change">Cambio: <strong id="modalChange">&#8353;0</strong></p>
-      <div class="modal__actions">
-        <button class="btn btn--ghost" id="btnCancelPay">Cancelar</button>
-        <button class="btn btn--charge" id="btnConfirmPay">Cobrar</button>
       </div>
     </div>
   </div>

@@ -1,8 +1,8 @@
 (function(){
   "use strict";
   const {
-    CRC, monthKey, getOpenDay, loadDay, getMonthRows, getOpenDaySales,
-    loadExpenseDay, getExpenseMonthRows, getOpenDayExpenses, closeOpenDay
+    CRC, monthKey, getOpenDay, loadDay, loadArchive, loadExpenseDay, loadExpenseArchive,
+    getMonthRows, getOpenDaySales, getOpenDayExpenses, closeOpenDay
   } = window.VV;
 
   let day = loadDay();
@@ -22,10 +22,8 @@
   const tabMonth = document.getElementById("tabMonth");
   const panelDay = document.getElementById("panelTablaDia");
   const panelMonth = document.getElementById("panelHistorico");
-  let activeTab = "day";
 
   function setTab(tab){
-    activeTab = tab;
     tabDay.classList.toggle("tab--active", tab === "day");
     tabMonth.classList.toggle("tab--active", tab === "month");
     tabDay.setAttribute("aria-selected", tab === "day");
@@ -36,53 +34,68 @@
   tabDay.addEventListener("click", () => setTab("day"));
   tabMonth.addEventListener("click", () => setTab("month"));
 
-  /* ---------- Ventas + gastos = ganancia neta (hoy y mes) ---------- */
-  function getFinancials(){
-    const ventasHoy = getTodaySales().reduce((s,i) => s + i.total, 0);
-    const ventasMes = getMonthRows(day).reduce((s,r) => s + r.total, 0);
+  /* ---------- Datos base del reporte ---------- */
+  const sumTotal = list => list.reduce((s, i) => s + (Number(i.total) || 0), 0);
 
-    const expenseDay = loadExpenseDay();
-    const gastosHoy = getOpenDayExpenses().reduce((s,i) => s + i.total, 0);
-    const gastosMes = getExpenseMonthRows(expenseDay).reduce((s,r) => s + r.total, 0);
+  function paymentKey(sale){
+    const method = String(sale.paymentMethod || "").toLowerCase();
+    if(method === "cash" || method === "efectivo") return "cash";
+    if(method === "card" || method === "tarjeta") return "card";
+    return "unclassified";
+  }
+  function paymentLabel(sale){
+    const key = paymentKey(sale);
+    return key === "cash" ? "Efectivo" : key === "card" ? "Tarjeta" : "Sin método";
+  }
+  function sumPayments(sales){
+    return sales.reduce((acc, sale) => {
+      acc[paymentKey(sale)] += Number(sale.total) || 0;
+      return acc;
+    }, { cash: 0, card: 0, unclassified: 0 });
+  }
+
+  function getTodaySales(){ return getOpenDaySales(); }
+
+  function getMonthSales(){
+    const month = monthKey(getOpenDay().businessDate);
+    return loadArchive().concat(loadDay().items)
+      .filter(item => item.businessDate && monthKey(item.businessDate) === month);
+  }
+  function getMonthExpenses(){
+    const month = monthKey(getOpenDay().businessDate);
+    return loadExpenseArchive().concat(loadExpenseDay().items)
+      .filter(item => item.businessDate && monthKey(item.businessDate) === month);
+  }
+
+  /* ---------- Ventas, pagos y ganancia neta (hoy y mes) ---------- */
+  function getFinancials(){
+    const salesDay = getTodaySales();
+    const salesMonth = getMonthSales();
+    const ventasHoy = sumTotal(salesDay);
+    const ventasMes = sumTotal(salesMonth);
+    const gastosHoy = sumTotal(getOpenDayExpenses());
+    const gastosMes = sumTotal(getMonthExpenses());
 
     return {
       ventasHoy, gastosHoy, gananciaHoy: ventasHoy - gastosHoy,
-      ventasMes, gastosMes, gananciaMes: ventasMes - gastosMes
+      ventasMes, gastosMes, gananciaMes: ventasMes - gastosMes,
+      pagosHoy: sumPayments(salesDay),
+      pagosMes: sumPayments(salesMonth)
     };
-  }
-
-  function getTodaySales(){
-    return getOpenDaySales();
   }
 
   function getReportContext(){
     const now = new Date();
     const openDay = getOpenDay();
-    const month = monthKey(openDay.businessDate);
-    const monthSales = loadArchive()
-      .filter(item => item.businessDate && monthKey(item.businessDate) === month)
-      .concat(day.items);
-    const sumPayments = sales => sales.reduce((totals, sale) => {
-      const method = String(sale.paymentMethod || "").toLowerCase();
-      const key = method === "cash" || method === "efectivo"
-        ? "cash"
-        : method === "card" || method === "tarjeta" ? "card" : "unclassified";
-      totals[key] += Number(sale.total) || 0;
-      return totals;
-    }, { cash: 0, card: 0, unclassified: 0 });
-    const hour = Number(new Intl.DateTimeFormat("en-US", {
-      hour: "2-digit", hourCycle: "h23"
-    }).format(now));
-
+    const businessDate = new Date(openDay.businessDate + "T00:00:00");
+    const hour = now.getHours();
+    const monthName = businessDate.toLocaleDateString("es-CR", { month: "long", year: "numeric" });
     return {
-      date: new Date(openDay.businessDate + "T00:00:00").toLocaleDateString("es-CR", { day: "2-digit", month: "2-digit", year: "numeric" }),
+      date: businessDate.toLocaleDateString("es-CR", { day: "2-digit", month: "2-digit", year: "numeric" }),
+      monthLabel: monthName.charAt(0).toUpperCase() + monthName.slice(1),
       time: now.toLocaleTimeString("es-CR", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }),
-      shift: hour >= 5 && hour < 12 ? "Mañana" : hour < 18 && hour >= 12 ? "Tarde" : "Noche",
-      cashier: window.VV.AUTH.currentUser(),
-      payments: {
-        day: sumPayments(getTodaySales()),
-        month: sumPayments(monthSales)
-      }
+      shift: hour >= 5 && hour < 12 ? "Mañana" : hour >= 12 && hour < 18 ? "Tarde" : "Noche",
+      cashier: window.VV.AUTH.currentUser()
     };
   }
 
@@ -145,359 +158,378 @@
     toast("Día cerrado correctamente.");
   });
 
-  /* ---------- Exportar PDF ---------- */
+  /* =========================================================
+     Exportar PDF
+     Nota: las fuentes estándar de PDF no incluyen el símbolo ₡,
+     por eso en el PDF los montos se muestran como "CRC 12,500".
+     ========================================================= */
+  const pdfMoney = n => {
+    const v = Math.round(Number(n) || 0);
+    const digits = String(Math.abs(v)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    return (v < 0 ? "-" : "") + "CRC " + digits;
+  };
+
   document.getElementById("btnPdf").addEventListener("click", () => {
-    const { jsPDF } = window.jspdf;
-    const doc = new jsPDF({ unit: "mm", format: "a4" });
-
-    const f = getFinancials();
-    const ventasHoy = f.ventasHoy;
-    const gastosHoy = f.gastosHoy;
-    const ventasMes = f.ventasMes;
-    const gastosMes = f.gastosMes;
-    const gananciaMes = f.gananciaMes;
-    const report = getReportContext();
-    const salesToday = getTodaySales();
-
-    const pageWidth = doc.internal.pageSize.getWidth();
-    const pageHeight = doc.internal.pageSize.getHeight();
-    const left = 18;
-    const right = pageWidth - 18;
-    const innerWidth = right - left;
-
-    doc.setFillColor(255, 255, 255);
-    doc.rect(0, 0, pageWidth, pageHeight, "F");
-
-    doc.setTextColor(15, 20, 24);
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(25);
-    doc.text("Volcano Vibes", left, 24);
-
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(10.5);
-    doc.setTextColor(60, 60, 60);
-    doc.text("Comidas Rápidas • Reporte Ejecutivo POS", left, 33);
-
-    const infoX = 126;
-    const infoY = 11;
-    const infoW = 68;
-    const infoH = 28;
-    doc.setFillColor(244, 244, 246);
-    doc.roundedRect(infoX, infoY, infoW, infoH, 1.5, 1.5, "F");
-    doc.setDrawColor(180, 180, 180);
-    doc.roundedRect(infoX, infoY, infoW, infoH, 1.5, 1.5, "S");
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(8.5);
-    doc.setTextColor(52, 52, 52);
-    doc.text(`Fecha: ${report.date}`, infoX + 5, infoY + 7);
-    doc.text(`Hora: ${report.time} (Costa Rica)`, infoX + 5, infoY + 13);
-    doc.text(`Turno: ${report.shift}`, infoX + 5, infoY + 19);
-    doc.text(`Cajero: ${report.cashier}`, infoX + 5, infoY + 25);
-
-    doc.setDrawColor(222, 59, 59);
-    doc.line(left, 39, right, 39);
-
-    const cardW = (innerWidth - 9) / 2;
-    const cardH = 23;
-    const row1Y = 47;
-    const row2Y = 77;
-    const cards = [
-      { x: left, y: row1Y, w: cardW, h: cardH, bg: [219, 240, 226], border: [175, 208, 178], label: "VENTAS HOY", value: CRC(ventasHoy) },
-      { x: left + cardW + 9, y: row1Y, w: cardW, h: cardH, bg: [246, 228, 232], border: [210, 176, 188], label: "GASTOS HOY", value: CRC(gastosHoy) },
-      { x: left, y: row2Y, w: cardW, h: cardH, bg: [224, 236, 250], border: [176, 201, 234], label: "VENTAS DEL MES", value: CRC(ventasMes) },
-      { x: left + cardW + 9, y: row2Y, w: cardW, h: cardH, bg: [239, 235, 203], border: [218, 209, 160], label: "GASTOS DEL MES", value: CRC(gastosMes) }
-    ];
-
-    cards.forEach(card => {
-      doc.setFillColor(card.bg[0], card.bg[1], card.bg[2]);
-      doc.roundedRect(card.x, card.y, card.w, card.h, 1.8, 1.8, "F");
-      doc.setDrawColor(card.border[0], card.border[1], card.border[2]);
-      doc.roundedRect(card.x, card.y, card.w, card.h, 1.8, 1.8, "S");
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(9);
-      doc.setTextColor(48, 48, 48);
-      doc.text(card.label, card.x + 6, card.y + 8);
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(17);
-      doc.setTextColor(18, 18, 18);
-      doc.text(card.value, card.x + 6, card.y + 18);
-    });
-
-    const section1Y = 112;
-    doc.setFillColor(22, 35, 52);
-    doc.rect(left, section1Y, innerWidth, 9, "F");
-    doc.setTextColor(255, 255, 255);
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(11.5);
-    doc.text("1. DINERO GENERADO POR PERÍODO", left + 4, section1Y + 6.5);
-
-    const metricY = 126;
-    const metricH = 29;
-    const singleMetricW = innerWidth;
-
-    doc.setFillColor(214, 244, 224);
-    doc.roundedRect(left, metricY, singleMetricW, metricH, 1.8, 1.8, "F");
-    doc.setDrawColor(76, 179, 119);
-    doc.roundedRect(left, metricY, singleMetricW, metricH, 1.8, 1.8, "S");
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(10.5);
-    doc.setTextColor(22, 110, 77);
-    doc.text("Efectivo en Caja", left + 8, metricY + 8);
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(11.5);
-    doc.text(`TOTAL EFECTIVO DEL DÍA: ${CRC(report.payments.day.cash)}`, left + 8, metricY + 16);
-    doc.text(`TOTAL EFECTIVO DEL MES: ${CRC(report.payments.month.cash)}`, left + 8, metricY + 24);
-
-    const bankY = metricY + 36;
-    doc.setFillColor(226, 239, 251);
-    doc.roundedRect(left, bankY, singleMetricW, metricH, 1.8, 1.8, "F");
-    doc.setDrawColor(99, 145, 224);
-    doc.roundedRect(left, bankY, singleMetricW, metricH, 1.8, 1.8, "S");
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(9.2);
-    doc.setTextColor(34, 97, 194);
-    const bankLabel = doc.splitTextToSize("Transacciones Bancarias / Tarjeta", singleMetricW - 18);
-    doc.text(bankLabel, left + 8, bankY + 8);
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(11.5);
-    doc.text(`TOTAL DATÁFONO DEL DÍA: ${CRC(report.payments.day.card)}`, left + 8, bankY + 16);
-    doc.text(`TOTAL DATÁFONO DEL MES: ${CRC(report.payments.month.card)}`, left + 8, bankY + 24);
-
-    let section2Y = bankY + 35;
-    const unclassifiedDay = report.payments.day.unclassified;
-    const unclassifiedMonth = report.payments.month.unclassified;
-    if(unclassifiedDay > 0 || unclassifiedMonth > 0){
-      const unclassifiedY = bankY + 35;
-      doc.setFillColor(246, 239, 222);
-      doc.roundedRect(left, unclassifiedY, singleMetricW, 16, 1.8, 1.8, "F");
-      doc.setDrawColor(218, 190, 133);
-      doc.roundedRect(left, unclassifiedY, singleMetricW, 16, 1.8, 1.8, "S");
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(8.5);
-      doc.setTextColor(132, 91, 21);
-      doc.text(`Sin método registrado · Día: ${CRC(unclassifiedDay)} · Mes: ${CRC(unclassifiedMonth)}`, left + 8, unclassifiedY + 10);
-      section2Y = unclassifiedY + 22;
-    }
-    doc.setFillColor(22, 35, 52);
-    doc.rect(left, section2Y, innerWidth, 9, "F");
-    doc.setTextColor(255, 255, 255);
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(11.5);
-    doc.text("2. RESUMEN DEL MES", left + 4, section2Y + 6.5);
-
-    const summaryBaseY = section2Y + 18;
-    const summaryRows = [
-      { label: "(+) Ventas Totales del Mes", value: CRC(ventasMes) },
-      { label: "(-) Gastos Totales del Mes", value: CRC(gastosMes) },
-      { label: "(=) Ganancia Limpia del Mes", value: CRC(gananciaMes) }
-    ];
-
-    summaryRows.forEach((row, idx) => {
-      const y = summaryBaseY + idx * 14;
-      doc.setDrawColor(205, 205, 205);
-      doc.line(left, y + 9, right, y + 9);
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(9.8);
-      doc.setTextColor(30, 30, 30);
-      const labelWidth = right - left - 64;
-      const labelLines = doc.splitTextToSize(row.label, labelWidth);
-      doc.text(labelLines, left + 4, y + 2);
-      doc.text(row.value, right - 4, y + 2, { align: "right" });
-    });
-
-    doc.addPage();
-    doc.setTextColor(15, 20, 24);
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(16);
-    doc.text("Ventas del turno abierto", left, 20);
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(10);
-    doc.text(`Fecha de negocio: ${report.date}`, left, 27);
-    doc.autoTable({
-      head: [["Hora", "Producto", "Cantidad", "Total"]],
-      body: salesToday.map(sale => [sale.time || "", sale.product, String(sale.qty), CRC(sale.total)]),
-      startY: 34,
-      styles: { fontSize: 9 },
-      headStyles: { fillColor: [182, 56, 53] },
-      didDrawPage: () => {
-        doc.setFontSize(8);
-        doc.setTextColor(100, 100, 100);
-        doc.text("Volcano Vibes · Turno abierto", left, pageHeight - 8);
+    try{
+      if(!window.jspdf || !window.jspdf.jsPDF){
+        toast("No se pudo cargar la librería de PDF. Revisa tu conexión a internet.");
+        return;
       }
-    });
+      const doc = new window.jspdf.jsPDF({ unit: "mm", format: "a4" });
+      if(typeof doc.autoTable !== "function"){
+        toast("No se pudo cargar el módulo de tablas del PDF. Revisa tu conexión a internet.");
+        return;
+      }
 
-    doc.save(`volcano-vibes-reporte-${activeTab === "day" ? "dia" : "mes"}-${getOpenDay().businessDate}.pdf`);
+      const f = getFinancials();
+      const report = getReportContext();
+      const salesToday = [...getTodaySales()].sort((a, b) => (a.ts || 0) - (b.ts || 0));
+      const monthRows = getMonthRows(loadDay());
+
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
+      const left = 18;
+      const right = pageWidth - 18;
+      const DARK = [22, 35, 52];
+      const RED = [182, 56, 53];
+      const GREEN = [35, 118, 83];
+
+      /* --- Encabezado --- */
+      doc.setTextColor(15, 20, 24);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(22);
+      doc.text("Volcano Vibes", left, 20);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      doc.setTextColor(90, 90, 90);
+      doc.text("Comidas Rápidas · Reporte de ventas y ganancias", left, 27);
+
+      doc.setFontSize(9);
+      doc.setTextColor(60, 60, 60);
+      doc.text(`Fecha: ${report.date}`, right, 13, { align: "right" });
+      doc.text(`Hora: ${report.time} (Costa Rica)`, right, 18, { align: "right" });
+      doc.text(`Turno: ${report.shift}`, right, 23, { align: "right" });
+      doc.text(`Cajero: ${report.cashier}`, right, 28, { align: "right" });
+
+      doc.setDrawColor(RED[0], RED[1], RED[2]);
+      doc.setLineWidth(0.8);
+      doc.line(left, 33, right, 33);
+      doc.setLineWidth(0.2);
+
+      /* --- Resumen financiero (día y mes) --- */
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(13);
+      doc.setTextColor(DARK[0], DARK[1], DARK[2]);
+      doc.text("Resumen financiero", left, 43);
+
+      const kinds = [];
+      const body = [];
+      const addLine = (kind, label, dayValue, monthValue) => {
+        kinds.push({ kind, dayValue, monthValue });
+        body.push([label, pdfMoney(dayValue), pdfMoney(monthValue)]);
+      };
+      addLine("sales", "Ventas totales", f.ventasHoy, f.ventasMes);
+      addLine("cash", "Pagos en efectivo", f.pagosHoy.cash, f.pagosMes.cash);
+      addLine("card", "Pagos con tarjeta", f.pagosHoy.card, f.pagosMes.card);
+      if(f.pagosHoy.unclassified > 0 || f.pagosMes.unclassified > 0){
+        addLine("warn", "Ventas sin método de pago registrado", f.pagosHoy.unclassified, f.pagosMes.unclassified);
+      }
+      addLine("expense", "(-) Gastos registrados", f.gastosHoy, f.gastosMes);
+      addLine("net", "(=) Ganancia neta (Ventas - Gastos)", f.gananciaHoy, f.gananciaMes);
+
+      doc.autoTable({
+        startY: 47,
+        margin: { left, right: left },
+        head: [["Concepto", `Hoy · ${report.date}`, `Mes · ${report.monthLabel}`]],
+        body,
+        theme: "grid",
+        styles: { font: "helvetica", fontSize: 10, cellPadding: 3.4, lineColor: [210, 215, 222], lineWidth: 0.2, textColor: [30, 38, 50] },
+        headStyles: { fillColor: DARK, textColor: [255, 255, 255], fontStyle: "bold" },
+        columnStyles: { 1: { halign: "right", cellWidth: 48 }, 2: { halign: "right", cellWidth: 48 } },
+        didParseCell: data => {
+          if(data.section === "head" && data.column.index > 0){ data.cell.styles.halign = "right"; }
+          if(data.section !== "body") return;
+          const info = kinds[data.row.index];
+          if(!info) return;
+          if(info.kind === "cash"){ data.cell.styles.fillColor = [226, 243, 233]; }
+          if(info.kind === "card"){ data.cell.styles.fillColor = [226, 236, 250]; }
+          if(info.kind === "warn"){ data.cell.styles.fillColor = [246, 239, 222]; }
+          if(info.kind === "net"){
+            data.cell.styles.fontStyle = "bold";
+            data.cell.styles.fontSize = 11;
+            const value = data.column.index === 1 ? info.dayValue : info.monthValue;
+            if(data.column.index === 0){
+              data.cell.styles.fillColor = [236, 240, 244];
+            }else{
+              data.cell.styles.fillColor = value < 0 ? [251, 227, 227] : [229, 242, 233];
+              data.cell.styles.textColor = value < 0 ? RED : GREEN;
+            }
+          }
+        }
+      });
+
+      /* --- Firmas --- */
+      let signY = doc.lastAutoTable.finalY + 38;
+      if(signY > pageHeight - 25){ doc.addPage(); signY = 60; }
+      doc.setDrawColor(120, 120, 120);
+      doc.line(left, signY, left + 70, signY);
+      doc.line(right - 70, signY, right, signY);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8.5);
+      doc.setTextColor(90, 90, 90);
+      doc.text("Firma Cajero(a) / Operador", left + 35, signY + 5, { align: "center" });
+      doc.text("Firma Encargado / Administrador", right - 35, signY + 5, { align: "center" });
+
+      /* --- Detalle: ventas del turno --- */
+      doc.addPage();
+      doc.setTextColor(15, 20, 24);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(15);
+      doc.text("Ventas del turno abierto", left, 20);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      doc.setTextColor(90, 90, 90);
+      doc.text(`Fecha de negocio: ${report.date}`, left, 27);
+
+      const turnQty = salesToday.reduce((s, i) => s + (Number(i.qty) || 0), 0);
+      doc.autoTable({
+        startY: 32,
+        margin: { left, right: left },
+        head: [["Hora", "Producto", "Cant.", "Método", "Total"]],
+        body: salesToday.length
+          ? salesToday.map(s => [s.time || "", s.product, String(s.qty), paymentLabel(s), pdfMoney(s.total)])
+          : [[{ content: "Sin ventas registradas en el turno actual.", colSpan: 5, styles: { halign: "center", textColor: [120, 120, 120] } }]],
+        foot: [["", "TOTAL DEL TURNO", String(turnQty), "", pdfMoney(f.ventasHoy)]],
+        showFoot: "lastPage",
+        theme: "striped",
+        styles: { font: "helvetica", fontSize: 9, cellPadding: 2.6 },
+        headStyles: { fillColor: RED, textColor: [255, 255, 255] },
+        footStyles: { fillColor: DARK, textColor: [255, 255, 255], fontStyle: "bold" },
+        alternateRowStyles: { fillColor: [247, 248, 250] },
+        columnStyles: { 0: { cellWidth: 20 }, 2: { halign: "center", cellWidth: 16 }, 3: { cellWidth: 28 }, 4: { halign: "right", cellWidth: 34 } }
+      });
+
+      /* --- Detalle: acumulado del mes por producto --- */
+      doc.addPage();
+      doc.setTextColor(15, 20, 24);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(15);
+      doc.text("Acumulado del mes por producto", left, 20);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      doc.setTextColor(90, 90, 90);
+      doc.text(report.monthLabel, left, 27);
+
+      const monthQty = monthRows.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+      doc.autoTable({
+        startY: 32,
+        margin: { left, right: left },
+        head: [["Producto", "Cant.", "Total acumulado"]],
+        body: monthRows.length
+          ? monthRows.map(r => [r.product, String(r.qty), pdfMoney(r.total)])
+          : [[{ content: "Todavía no hay ventas acumuladas este mes.", colSpan: 3, styles: { halign: "center", textColor: [120, 120, 120] } }]],
+        foot: [["TOTAL DEL MES", String(monthQty), pdfMoney(f.ventasMes)]],
+        showFoot: "lastPage",
+        theme: "striped",
+        styles: { font: "helvetica", fontSize: 9, cellPadding: 2.6 },
+        headStyles: { fillColor: RED, textColor: [255, 255, 255] },
+        footStyles: { fillColor: DARK, textColor: [255, 255, 255], fontStyle: "bold" },
+        alternateRowStyles: { fillColor: [247, 248, 250] },
+        columnStyles: { 1: { halign: "center", cellWidth: 20 }, 2: { halign: "right", cellWidth: 44 } }
+      });
+
+      /* --- Pie de página en todas las hojas --- */
+      const pages = doc.internal.getNumberOfPages();
+      for(let i = 1; i <= pages; i++){
+        doc.setPage(i);
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(8);
+        doc.setTextColor(120, 120, 120);
+        doc.text("Volcano Vibes · Reporte de ventas", left, pageHeight - 8);
+        doc.text(`Página ${i} de ${pages}`, right, pageHeight - 8, { align: "right" });
+      }
+
+      doc.save(`volcano-vibes-reporte-${getOpenDay().businessDate}.pdf`);
+    }catch(err){
+      console.error("Error al generar el PDF:", err);
+      toast("No se pudo generar el PDF: " + (err && err.message ? err.message : "error desconocido"));
+    }
   });
 
-  /* ---------- Exportar Excel ---------- */
+  /* =========================================================
+     Exportar Excel (xlsx-js-style)
+     ========================================================= */
   document.getElementById("btnXlsx").addEventListener("click", () => {
-    const f = getFinancials();
-    const ventasHoy = f.ventasHoy;
-    const gastosHoy = f.gastosHoy;
-    const ventasMes = f.ventasMes;
-    const gastosMes = f.gastosMes;
-    const gananciaMes = f.gananciaMes;
-    const report = getReportContext();
-    const salesToday = getTodaySales();
+    try{
+      if(typeof XLSX === "undefined"){
+        toast("No se pudo cargar la librería de Excel. Revisa tu conexión a internet.");
+        return;
+      }
 
-    const rows = [
-      [window.VV.NEGOCIO.nombre, "", "", ""],
-      ["Comidas Rápidas · Reporte Ejecutivo POS", "", "", ""],
-      ["Fecha", report.date, "Hora", report.time + " (Costa Rica)"],
-      ["Turno", report.shift, "Cajero", report.cashier],
-      ["", "", "", ""],
-      ["VENTAS HOY", "GASTOS HOY", "VENTAS DEL MES", "GASTOS DEL MES"],
-      [ventasHoy, gastosHoy, ventasMes, gastosMes],
-      ["", "", "", ""],
-      ["1. DINERO GENERADO POR PERÍODO", "", "", ""],
-      ["EFECTIVO · HOY", "DATÁFONO · HOY", "EFECTIVO · MES", "DATÁFONO · MES"],
-      [report.payments.day.cash, report.payments.day.card, report.payments.month.cash, report.payments.month.card],
-      [report.payments.day.unclassified > 0 ? "Ventas sin método · Hoy" : "", report.payments.day.unclassified || "", report.payments.month.unclassified > 0 ? "Ventas sin método · Mes" : "", report.payments.month.unclassified || ""],
-      ["", "", "", ""],
-      ["2. RESUMEN DEL MES", "", "", ""],
-      ["(+) Ventas Totales del Mes", "", "", ventasMes],
-      ["(-) Gastos Totales del Mes", "", "", gastosMes],
-      ["(=) Ganancia Limpia del Mes", "", "", gananciaMes],
-      ["", "", "", ""],
-      ["Firma Cajero(a) / Operador", "", "Firma Encargado / Administrador", ""]
-    ];
+      const f = getFinancials();
+      const report = getReportContext();
+      const salesToday = [...getTodaySales()].sort((a, b) => (a.ts || 0) - (b.ts || 0));
+      const monthRows = getMonthRows(loadDay());
 
-    const ws = XLSX.utils.aoa_to_sheet(rows);
-    const merges = ["A1:D1", "A2:D2", "A9:D9", "A14:D14", "A15:C15", "A16:C16", "A17:C17", "A19:B19", "C19:D19"];
-    ws["!merges"] = merges.map(range => XLSX.utils.decode_range(range));
-    ws["!cols"] = [{ wch: 32 }, { wch: 20 }, { wch: 32 }, { wch: 20 }];
-    ws["!rows"] = [
-      { hpt: 34 }, { hpt: 23 }, { hpt: 22 }, { hpt: 22 }, { hpt: 10 },
-      { hpt: 24 }, { hpt: 32 }, { hpt: 10 }, { hpt: 27 }, { hpt: 24 },
-      { hpt: 30 }, { hpt: 22 }, { hpt: 10 }, { hpt: 27 }, { hpt: 24 },
-      { hpt: 24 }, { hpt: 28 }, { hpt: 12 }, { hpt: 26 }
-    ];
+      const FMT = '"₡"#,##0;[Red]-"₡"#,##0';
+      const fill = rgb => ({ patternType: "solid", fgColor: { rgb } });
+      const thin = { style: "thin", color: { rgb: "D5DCE4" } };
+      const box = { top: thin, bottom: thin, left: thin, right: thin };
+      const font = (opts) => Object.assign({ name: "Calibri", sz: 11, color: { rgb: "263445" } }, opts || {});
 
-    const fill = color => ({ patternType: "solid", fgColor: { rgb: color } });
-    const setRangeStyle = (range, style) => {
-      const bounds = XLSX.utils.decode_range(range);
-      for(let row = bounds.s.r; row <= bounds.e.r; row++){
-        for(let col = bounds.s.c; col <= bounds.e.c; col++){
-          const address = XLSX.utils.encode_cell({ r: row, c: col });
-          if(!ws[address]) ws[address] = { t: "s", v: "" };
-          ws[address].s = style;
+      const setStyle = (ws, r, c, style) => {
+        const addr = XLSX.utils.encode_cell({ r, c });
+        if(!ws[addr]) ws[addr] = { t: "s", v: "" };
+        ws[addr].s = style;
+      };
+      const setRow = (ws, r, fromC, toC, style) => {
+        for(let c = fromC; c <= toC; c++) setStyle(ws, r, c, style);
+      };
+
+      /* ----- Hoja 1: Resumen ----- */
+      const rows = [];
+      rows.push(["Volcano Vibes", "", ""]);                                            // 0
+      rows.push(["Comidas Rápidas · Reporte de ventas y ganancias", "", ""]);          // 1
+      rows.push(["Fecha", report.date, ""]);                                           // 2
+      rows.push(["Hora", report.time + " (Costa Rica)", ""]);                          // 3
+      rows.push(["Turno", report.shift, ""]);                                          // 4
+      rows.push(["Cajero", report.cashier, ""]);                                       // 5
+      rows.push(["", "", ""]);                                                         // 6
+      rows.push(["RESUMEN FINANCIERO", "Hoy · " + report.date, "Mes · " + report.monthLabel]); // 7
+
+      const lines = [
+        { kind: "sales", label: "Ventas totales", d: f.ventasHoy, m: f.ventasMes },
+        { kind: "cash", label: "Pagos en efectivo", d: f.pagosHoy.cash, m: f.pagosMes.cash },
+        { kind: "card", label: "Pagos con tarjeta", d: f.pagosHoy.card, m: f.pagosMes.card }
+      ];
+      if(f.pagosHoy.unclassified > 0 || f.pagosMes.unclassified > 0){
+        lines.push({ kind: "warn", label: "Ventas sin método de pago registrado", d: f.pagosHoy.unclassified, m: f.pagosMes.unclassified });
+      }
+      lines.push({ kind: "expense", label: "(-) Gastos registrados", d: f.gastosHoy, m: f.gastosMes });
+      lines.push({ kind: "net", label: "(=) Ganancia neta (Ventas - Gastos)", d: f.gananciaHoy, m: f.gananciaMes });
+
+      const firstLine = rows.length; // 8
+      lines.forEach(l => rows.push([l.label, l.d, l.m]));
+      const lastLine = rows.length - 1;
+      rows.push(["", "", ""]);                                                        // espacio
+      const signLineRow = rows.length; rows.push(["", "", ""]);                        // línea de firma
+      const signLabelRow = rows.length; rows.push(["Firma Cajero(a) / Operador", "", "Firma Encargado / Administrador"]);
+
+      const ws = XLSX.utils.aoa_to_sheet(rows);
+      ws["!cols"] = [{ wch: 42 }, { wch: 26 }, { wch: 34 }];
+      ws["!merges"] = [
+        { s: { r: 0, c: 0 }, e: { r: 0, c: 2 } },
+        { s: { r: 1, c: 0 }, e: { r: 1, c: 2 } },
+        { s: { r: 2, c: 1 }, e: { r: 2, c: 2 } },
+        { s: { r: 3, c: 1 }, e: { r: 3, c: 2 } },
+        { s: { r: 4, c: 1 }, e: { r: 4, c: 2 } },
+        { s: { r: 5, c: 1 }, e: { r: 5, c: 2 } }
+      ];
+      ws["!rows"] = [];
+      ws["!rows"][0] = { hpt: 34 };
+      ws["!rows"][1] = { hpt: 22 };
+      ws["!rows"][7] = { hpt: 26 };
+      ws["!rows"][signLineRow] = { hpt: 38 };
+      ws["!rows"][signLabelRow] = { hpt: 22 };
+
+      setRow(ws, 0, 0, 2, { font: font({ name: "Calibri", sz: 20, bold: true, color: { rgb: "FFFFFF" } }), fill: fill("162334"), alignment: { horizontal: "left", vertical: "center", indent: 1 } });
+      setRow(ws, 1, 0, 2, { font: font({ sz: 11, color: { rgb: "FFE2CF" } }), fill: fill("293A4D"), alignment: { horizontal: "left", vertical: "center", indent: 1 } });
+      for(let r = 2; r <= 5; r++){
+        setStyle(ws, r, 0, { font: font({ sz: 10, bold: true, color: { rgb: "526276" } }), fill: fill("EEF2F6"), border: box, alignment: { vertical: "center", indent: 1 } });
+        setStyle(ws, r, 1, { font: font(), fill: fill("F7F9FB"), border: box, alignment: { horizontal: "left", vertical: "center", indent: 1 } });
+        setStyle(ws, r, 2, { font: font(), fill: fill("F7F9FB"), border: box });
+      }
+      setStyle(ws, 7, 0, { font: font({ bold: true, color: { rgb: "FFFFFF" } }), fill: fill("162334"), border: box, alignment: { horizontal: "left", vertical: "center", indent: 1 } });
+      setStyle(ws, 7, 1, { font: font({ bold: true, color: { rgb: "FFFFFF" } }), fill: fill("162334"), border: box, alignment: { horizontal: "right", vertical: "center", wrapText: true } });
+      setStyle(ws, 7, 2, { font: font({ bold: true, color: { rgb: "FFFFFF" } }), fill: fill("162334"), border: box, alignment: { horizontal: "right", vertical: "center", wrapText: true } });
+
+      lines.forEach((l, i) => {
+        const r = firstLine + i;
+        let bg = "FFFFFF", color = "263445", bold = false, sz = 11;
+        if(l.kind === "sales"){ bg = "F1F5F8"; bold = true; }
+        if(l.kind === "cash"){ bg = "E2F3E9"; color = "1F6B4A"; bold = true; }
+        if(l.kind === "card"){ bg = "E2ECFA"; color = "2152A0"; bold = true; }
+        if(l.kind === "warn"){ bg = "F6EFDE"; color = "825915"; }
+        if(l.kind === "net"){ bold = true; sz = 12; }
+        ws["!rows"][r] = { hpt: l.kind === "net" ? 28 : 22 };
+        setStyle(ws, r, 0, { font: font({ sz, bold, color: { rgb: color } }), fill: fill(l.kind === "net" ? "ECF0F4" : bg), border: box, alignment: { horizontal: "left", vertical: "center", indent: 1 } });
+        [[1, l.d], [2, l.m]].forEach(([c, value]) => {
+          let cellColor = color, cellBg = bg;
+          if(l.kind === "net"){
+            cellColor = value < 0 ? "B63835" : "237653";
+            cellBg = value < 0 ? "FBE3E3" : "E5F2E9";
+          }
+          setStyle(ws, r, c, { font: font({ sz, bold: true, color: { rgb: cellColor } }), fill: fill(cellBg), border: box, numFmt: FMT, alignment: { horizontal: "right", vertical: "center" } });
+        });
+      });
+
+      const signBorder = { bottom: { style: "thin", color: { rgb: "657487" } } };
+      setStyle(ws, signLineRow, 0, { font: font(), border: signBorder });
+      setStyle(ws, signLineRow, 2, { font: font(), border: signBorder });
+      [0, 2].forEach(c => setStyle(ws, signLabelRow, c, { font: font({ sz: 9, italic: true, color: { rgb: "657487" } }), alignment: { horizontal: "center", vertical: "center" } }));
+
+      /* ----- Hoja 2: Ventas del turno ----- */
+      const turnHead = ["Fecha", "Hora", "Producto", "Cantidad", "Precio unitario", "Método de pago", "Total"];
+      const turnRows = [turnHead];
+      salesToday.forEach(s => turnRows.push([
+        s.businessDate || "", s.time || "", s.product, Number(s.qty) || 0, Number(s.unit) || 0, paymentLabel(s), Number(s.total) || 0
+      ]));
+      const turnTotalRow = turnRows.length;
+      turnRows.push(["", "", "TOTAL DEL TURNO", salesToday.reduce((s, i) => s + (Number(i.qty) || 0), 0), "", "", f.ventasHoy]);
+      const wsTurn = XLSX.utils.aoa_to_sheet(turnRows);
+      wsTurn["!cols"] = [{ wch: 12 }, { wch: 9 }, { wch: 40 }, { wch: 10 }, { wch: 16 }, { wch: 16 }, { wch: 16 }];
+      for(let c = 0; c < turnHead.length; c++){
+        setStyle(wsTurn, 0, c, { font: font({ bold: true, color: { rgb: "FFFFFF" } }), fill: fill("B63835"), border: box, alignment: { horizontal: c >= 3 ? "center" : "left", vertical: "center", wrapText: true } });
+      }
+      for(let r = 1; r < turnTotalRow; r++){
+        for(let c = 0; c < turnHead.length; c++){
+          const money = c === 4 || c === 6;
+          setStyle(wsTurn, r, c, {
+            font: font(), border: box, fill: fill(r % 2 === 0 ? "F7F8FA" : "FFFFFF"),
+            numFmt: money ? FMT : undefined,
+            alignment: { horizontal: money ? "right" : c === 3 ? "center" : "left", vertical: "center" }
+          });
         }
       }
-    };
-    const baseStyle = {
-      font: { name: "Aptos", sz: 11, color: { rgb: "263445" } },
-      alignment: { vertical: "center" }
-    };
-    const currencyStyle = {
-      ...baseStyle,
-      font: { name: "Aptos", sz: 12, bold: true, color: { rgb: "162334" } },
-      numFmt: '"₡" #,##0',
-      alignment: { horizontal: "right", vertical: "center" }
-    };
+      for(let c = 0; c < turnHead.length; c++){
+        const money = c === 6;
+        setStyle(wsTurn, turnTotalRow, c, {
+          font: font({ bold: true, color: { rgb: "FFFFFF" } }), fill: fill("162334"), border: box,
+          numFmt: money ? FMT : undefined,
+          alignment: { horizontal: money ? "right" : c === 3 ? "center" : "left", vertical: "center" }
+        });
+      }
+      if(salesToday.length){ wsTurn["!autofilter"] = { ref: "A1:G" + (salesToday.length + 1) }; }
 
-    setRangeStyle("A1:D19", baseStyle);
-    setRangeStyle("A1:D1", {
-      font: { name: "Aptos Display", sz: 20, bold: true, color: { rgb: "FFFFFF" } },
-      fill: fill("162334"),
-      alignment: { horizontal: "left", vertical: "center", indent: 1 }
-    });
-    setRangeStyle("A2:D2", {
-      font: { name: "Aptos", sz: 11, color: { rgb: "FFE2CF" } },
-      fill: fill("293A4D"),
-      alignment: { horizontal: "left", vertical: "center", indent: 1 }
-    });
-    ["A3", "C3", "A4", "C4"].forEach(cell => {
-      setRangeStyle(cell, {
-        ...baseStyle,
-        font: { name: "Aptos", sz: 10, bold: true, color: { rgb: "526276" } },
-        fill: fill("EEF2F6")
-      });
-    });
-    ["B3", "D3", "B4", "D4"].forEach(cell => {
-      setRangeStyle(cell, { ...baseStyle, fill: fill("F7F9FB") });
-    });
+      /* ----- Hoja 3: Acumulado del mes ----- */
+      const monthHead = ["Producto", "Cantidad", "Total acumulado"];
+      const monthSheetRows = [monthHead];
+      monthRows.forEach(r => monthSheetRows.push([r.product, Number(r.qty) || 0, Number(r.total) || 0]));
+      const monthTotalRow = monthSheetRows.length;
+      monthSheetRows.push(["TOTAL DEL MES", monthRows.reduce((s, r) => s + (Number(r.qty) || 0), 0), f.ventasMes]);
+      const wsMonth = XLSX.utils.aoa_to_sheet(monthSheetRows);
+      wsMonth["!cols"] = [{ wch: 42 }, { wch: 12 }, { wch: 20 }];
+      for(let c = 0; c < 3; c++){
+        setStyle(wsMonth, 0, c, { font: font({ bold: true, color: { rgb: "FFFFFF" } }), fill: fill("B63835"), border: box, alignment: { horizontal: c === 0 ? "left" : c === 1 ? "center" : "right", vertical: "center" } });
+      }
+      for(let r = 1; r < monthTotalRow; r++){
+        setStyle(wsMonth, r, 0, { font: font(), border: box, fill: fill(r % 2 === 0 ? "F7F8FA" : "FFFFFF"), alignment: { horizontal: "left", vertical: "center" } });
+        setStyle(wsMonth, r, 1, { font: font(), border: box, fill: fill(r % 2 === 0 ? "F7F8FA" : "FFFFFF"), alignment: { horizontal: "center", vertical: "center" } });
+        setStyle(wsMonth, r, 2, { font: font(), border: box, fill: fill(r % 2 === 0 ? "F7F8FA" : "FFFFFF"), numFmt: FMT, alignment: { horizontal: "right", vertical: "center" } });
+      }
+      setStyle(wsMonth, monthTotalRow, 0, { font: font({ bold: true, color: { rgb: "FFFFFF" } }), fill: fill("162334"), border: box, alignment: { horizontal: "left", vertical: "center" } });
+      setStyle(wsMonth, monthTotalRow, 1, { font: font({ bold: true, color: { rgb: "FFFFFF" } }), fill: fill("162334"), border: box, alignment: { horizontal: "center", vertical: "center" } });
+      setStyle(wsMonth, monthTotalRow, 2, { font: font({ bold: true, color: { rgb: "FFFFFF" } }), fill: fill("162334"), border: box, numFmt: FMT, alignment: { horizontal: "right", vertical: "center" } });
 
-    const kpiColors = ["D9F0E2", "F6E4E8", "E0ECFA", "EFEBCB"];
-    ["A6", "B6", "C6", "D6"].forEach((cell, index) => setRangeStyle(cell, {
-      font: { name: "Aptos", sz: 10, bold: true, color: { rgb: "263445" } },
-      fill: fill(kpiColors[index]),
-      alignment: { horizontal: "center", vertical: "center", wrapText: true }
-    }));
-    ["A7", "B7", "C7", "D7"].forEach((cell, index) => setRangeStyle(cell, {
-      ...currencyStyle,
-      font: { name: "Aptos Display", sz: 16, bold: true, color: { rgb: "162334" } },
-      fill: fill(kpiColors[index]),
-      alignment: { horizontal: "center", vertical: "center" }
-    }));
-
-    const sectionStyle = {
-      font: { name: "Aptos", sz: 12, bold: true, color: { rgb: "FFFFFF" } },
-      fill: fill("162334"),
-      alignment: { horizontal: "left", vertical: "center", indent: 1 }
-    };
-    setRangeStyle("A9:D9", sectionStyle);
-    setRangeStyle("A14:D14", {
-      ...sectionStyle,
-      fill: fill("B63835")
-    });
-    ["A10", "B10", "C10", "D10"].forEach((cell, index) => setRangeStyle(cell, {
-      font: { name: "Aptos", sz: 9, bold: true, color: { rgb: "FFFFFF" } },
-      fill: fill(["237653", "2861B8", "237653", "2861B8"][index]),
-      alignment: { horizontal: "center", vertical: "center", wrapText: true }
-    }));
-    setRangeStyle("A11:D11", {
-      ...currencyStyle,
-      fill: fill("F0F6F4"),
-      border: { bottom: { style: "thin", color: { rgb: "D6E4DD" } } }
-    });
-    if(report.payments.day.unclassified > 0 || report.payments.month.unclassified > 0){
-      setRangeStyle("A12:D12", {
-        font: { name: "Aptos", sz: 9, color: { rgb: "825915" } },
-        fill: fill("F6EFDE"),
-        numFmt: '"₡" #,##0',
-        alignment: { vertical: "center", wrapText: true }
-      });
-      ["B12", "D12"].forEach(cell => setRangeStyle(cell, {
-        ...currencyStyle,
-        font: { name: "Aptos", sz: 10, bold: true, color: { rgb: "825915" } },
-        fill: fill("F6EFDE")
-      }));
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Resumen");
+      XLSX.utils.book_append_sheet(wb, wsTurn, "Ventas del turno");
+      XLSX.utils.book_append_sheet(wb, wsMonth, "Acumulado del mes");
+      XLSX.writeFile(wb, `volcano-vibes-reporte-${getOpenDay().businessDate}.xlsx`);
+    }catch(err){
+      console.error("Error al generar el Excel:", err);
+      toast("No se pudo generar el Excel: " + (err && err.message ? err.message : "error desconocido"));
     }
-
-    ["A15:C15", "A16:C16", "A17:C17"].forEach((range, index) => setRangeStyle(range, {
-      ...baseStyle,
-      font: { name: "Aptos", sz: 11, bold: index === 2, color: { rgb: "263445" } },
-      fill: fill(index === 2 ? "E5F2E9" : index === 0 ? "F1F5F8" : "FFFFFF"),
-      border: { bottom: { style: "thin", color: { rgb: "DCE3E9" } } },
-      alignment: { horizontal: "left", vertical: "center", indent: 1 }
-    }));
-    ["D15", "D16", "D17"].forEach((cell, index) => setRangeStyle(cell, {
-      ...currencyStyle,
-      font: { name: "Aptos", sz: 11, bold: true, color: { rgb: index === 2 ? "237653" : "162334" } },
-      fill: fill(index === 2 ? "E5F2E9" : index === 0 ? "F1F5F8" : "FFFFFF"),
-      border: { bottom: { style: "thin", color: { rgb: "DCE3E9" } } }
-    }));
-    setRangeStyle("A19:D19", {
-      font: { name: "Aptos", sz: 9, italic: true, color: { rgb: "657487" } },
-      fill: fill("F1F4F7"),
-      alignment: { horizontal: "center", vertical: "center" },
-      border: { top: { style: "thin", color: { rgb: "BCC7D2" } } }
-    });
-
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Resumen ejecutivo");
-    const turnRows = salesToday.map(sale => ({
-      Fecha: sale.businessDate,
-      Hora: sale.time || "",
-      Producto: sale.product,
-      Cantidad: sale.qty,
-      "Precio unitario": sale.unit || "",
-      Total: sale.total,
-      "Método de pago": sale.paymentMethod || ""
-    }));
-    const turnSheet = XLSX.utils.json_to_sheet(turnRows);
-    XLSX.utils.book_append_sheet(wb, turnSheet, "Ventas del turno");
-    XLSX.writeFile(wb, `volcano-vibes-resumen-${getOpenDay().businessDate}.xlsx`);
   });
 
   /* ---------- Toast ---------- */
@@ -507,7 +539,7 @@
     el.textContent = msg;
     el.classList.add("toast--show");
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => el.classList.remove("toast--show"), 2200);
+    toastTimer = setTimeout(() => el.classList.remove("toast--show"), 3500);
   }
 
   /* ---------- Init ---------- */

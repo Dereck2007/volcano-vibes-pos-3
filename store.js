@@ -7,7 +7,7 @@ window.VV = (function(){
     cedula: "3-101-XXXXXX",
     telefono: "8888-0000",
     ubicacion: "La Fortuna, San Carlos",
-    iva: 0.13
+    iva: 0
   };
 
   const PRODUCTS = [
@@ -16,7 +16,7 @@ window.VV = (function(){
     { id: "h2", cat: "hamburguesas", name: "Hamburguesa Mediterránea", desc: "Hamburguesas Volcano", price: 4850 },
     { id: "h3", cat: "hamburguesas", name: "Hamburguesa Hawaiana", desc: "Hamburguesas Volcano", price: 4850 },
     { id: "h4", cat: "hamburguesas", name: "Hamburguesa BBQ", desc: "Hamburguesas Volcano", price: 4850 },
-    { id: "h5", cat: "hamburguesas", name: "Hamburguesa Tocinito", desc: "Hamburguesas Volcano", price: 3450 },
+    { id: "h5", cat: "hamburguesas", name: "Hamburguesa Tocino", desc: "Hamburguesas Volcano", price: 3450 },
     { id: "h6", cat: "hamburguesas", name: "Hamburguesa Jamón", desc: "Hamburguesas Volcano", price: 3450 },
     { id: "h7", cat: "hamburguesas", name: "Hamburguesa Queso", desc: "Hamburguesas Volcano", price: 2850 },
 
@@ -28,7 +28,7 @@ window.VV = (function(){
     { id: "b5", cat: "burritos", name: "Wrap Vegetariano", desc: "Burritos y Wraps", price: 4250 },
 
     // Nachos y Papas
-    { id: "n1", cat: "nachos", name: "Nacho Mixto (El Favorito)", desc: "Nachos y Papas", price: 4950 },
+    { id: "n1", cat: "nachos", name: "Nacho Mixto Arenal (El Favorito)", desc: "Nachos y Papas", price: 4950 },
     { id: "n2", cat: "nachos", name: "Nacho Pollo", desc: "Nachos y Papas", price: 3850 },
     { id: "n3", cat: "nachos", name: "Nacho Carne", desc: "Nachos y Papas", price: 3850 },
     { id: "n4", cat: "nachos", name: "Nacho Queso", desc: "Nachos y Papas", price: 2850 },
@@ -49,7 +49,7 @@ window.VV = (function(){
     { id: "c3", cat: "combos", name: "2 Hamb. Queso + Fresco", desc: "Combos Volcano", price: 4850 },
     { id: "c4", cat: "combos", name: "1 Hamb. Queso Sencilla", desc: "Combos Volcano", price: 1650 },
     { id: "c5", cat: "combos", name: "1 Burrito Queso Batata", desc: "Combos Volcano", price: 1750 },
-    { id: "c6", cat: "combos", name: "Dedos de Pollo o Pescado", desc: "Combos Volcano", price: 3950 },
+    { id: "c6", cat: "combos", name: "Dedos Pollo o Pescado", desc: "Combos Volcano", price: 3950 },
     { id: "c7", cat: "combos", name: "Orden de Papas (Sola)", desc: "Combos Volcano", price: 1200 },
 
     // Ceviches y Caldosas

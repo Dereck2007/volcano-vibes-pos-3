@@ -67,11 +67,10 @@
     renderCart();
   }
 
+  /* Sin IVA: el subtotal es igual al total y no se calcula ningún impuesto. */
   function totals(){
     const total = cart.reduce((s,i) => s + i.price * i.qty, 0);
-    const subtotal = total / (1 + NEGOCIO.iva);
-    const iva = total - subtotal;
-    return { subtotal, iva, total };
+    return { subtotal: total, iva: 0, total };
   }
 
   function renderCart(){
@@ -97,10 +96,7 @@
       row.querySelector(".cart-row__del").addEventListener("click", () => removeItem(item.id));
       cartList.appendChild(row);
     });
-    const { subtotal, iva, total } = totals();
-    document.getElementById("sumSubtotal").textContent = CRC(subtotal);
-    document.getElementById("sumIva").textContent = CRC(iva);
-    document.getElementById("sumTotal").textContent = CRC(total);
+    document.getElementById("sumTotal").textContent = CRC(totals().total);
   }
 
   document.getElementById("btnLimpiar").addEventListener("click", () => {
@@ -111,83 +107,37 @@
 
   /* ---------- Modal de cobro ---------- */
   const payOverlay = document.getElementById("payOverlay");
-  const payMethodSelection = document.getElementById("payMethodSelection");
-  const cashPaymentSection = document.getElementById("cashPaymentSection");
-  const cashInput = document.getElementById("cashInput");
   const modalTotal = document.getElementById("modalTotal");
-  const modalChange = document.getElementById("modalChange");
-
-  function resetPaymentModal(){
-    payMethodSelection.hidden = false;
-    cashPaymentSection.hidden = true;
-    cashInput.value = "";
-    modalChange.textContent = CRC(0);
-    modalChange.parentElement.classList.remove("modal__change--bad");
-  }
 
   document.getElementById("btnCobrar").addEventListener("click", () => {
     if(cart.length === 0){ toast("Agrega al menos un producto a la orden."); return; }
-    const { total } = totals();
-    modalTotal.textContent = CRC(total);
-    resetPaymentModal();
+    modalTotal.textContent = CRC(totals().total);
     payOverlay.hidden = false;
   });
 
-  function updateChange(){
-    const { total } = totals();
-    const cash = parseFloat(cashInput.value) || 0;
-    const change = cash - total;
-    modalChange.textContent = CRC(Math.max(change, 0));
-    modalChange.parentElement.classList.toggle("modal__change--bad", change < 0);
-  }
-  cashInput.addEventListener("input", updateChange);
-
-  document.getElementById("btnPayCash").addEventListener("click", () => {
-    payMethodSelection.hidden = true;
-    cashPaymentSection.hidden = false;
-    cashInput.value = "";
-    modalChange.textContent = CRC(0);
-    modalChange.parentElement.classList.remove("modal__change--bad");
-    cashInput.focus();
-  });
-
-  document.getElementById("btnPayCard").addEventListener("click", () => {
+  /* Cobro directo: registra la venta de inmediato (efectivo o tarjeta) y limpia el carrito. */
+  function cobrar(method){
+    if(cart.length === 0) return;
     const { subtotal, iva, total } = totals();
-    const cash = total;
-    const change = 0;
 
-    fillTicket({ subtotal, iva, total, cash, change });
-    registerSale(cart, "card");
+    fillTicket({ subtotal, iva, total, cash: total, change: 0 });
+    registerSale(cart, method);
 
     payOverlay.hidden = true;
     cart = [];
     renderCart();
-    toast("Venta cobrada con tarjeta correctamente \u2713");
-  });
+    toast(method === "cash"
+      ? "Venta cobrada en efectivo correctamente \u2713"
+      : "Venta cobrada con tarjeta correctamente \u2713");
+  }
+
+  document.getElementById("btnPayCash").addEventListener("click", () => cobrar("cash"));
+  document.getElementById("btnPayCard").addEventListener("click", () => cobrar("card"));
 
   document.getElementById("btnCancelPayMethod").addEventListener("click", () => {
     payOverlay.hidden = true;
-    resetPaymentModal();
   });
-
-  document.getElementById("btnCancelPay").addEventListener("click", () => { payOverlay.hidden = true; });
   payOverlay.addEventListener("click", e => { if(e.target === payOverlay) payOverlay.hidden = true; });
-
-  document.getElementById("btnConfirmPay").addEventListener("click", () => {
-    const { subtotal, iva, total } = totals();
-    const cash = parseFloat(cashInput.value) || 0;
-    if(cash < total){ toast("El efectivo recibido es menor al total."); return; }
-    const change = cash - total;
-
-    fillTicket({ subtotal, iva, total, cash, change });
-    registerSale(cart, "cash");
-
-    payOverlay.hidden = true;
-
-    cart = [];
-    renderCart();
-    toast("Venta cobrada correctamente \u2713");
-  });
 
   /* ---------- Plantilla de factura simple ---------- */
   function fillTicket({ subtotal, iva, total, cash, change }){
