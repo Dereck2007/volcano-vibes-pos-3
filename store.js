@@ -214,6 +214,7 @@ window.VV = (function(){
   let cloudReady = false;
   let cloudConflict = false;
   let cloudBackupReady = false;
+  let cloudLocalBackupPending = false;
   let cloudRemoteExists = false;
   let cloudState = null;
   let cloudUnsubscribe = null;
@@ -233,6 +234,11 @@ window.VV = (function(){
   function isCloudReady(){ return cloudReady && !cloudConflict; }
   function getCloudStatus(){ return { status: cloudStatus, error: cloudError, conflict: cloudConflict }; }
 
+  function emitCloudReadyStatus(){
+    emitCloudStatus(cloudLocalBackupPending ? "loaded-backup-error" : "loaded",
+      cloudLocalBackupPending ? new Error("No se pudo guardar una copia de respaldo de los datos locales divergentes.") : null);
+  }
+
   function emitCloudStatus(status, error){
     cloudStatus = status;
     cloudError = error || null;
@@ -241,6 +247,7 @@ window.VV = (function(){
     const statusMessages = {
       initializing: "Conectando con Firestore…",
       loaded: "Datos sincronizados con Firestore.",
+      "loaded-backup-error": "Firestore está activo, pero no se pudo respaldar la caché local divergente. Se conserva intacta y puedes reintentar.",
       empty: "Firestore estaba vacío; se inicializó un turno compartido.",
       conflict: "Conflicto de datos locales. No se sobrescribió la copia local y las escrituras están pausadas.",
       "connection-error": "Sin conexión con Firestore. Los cobros y cambios están pausados.",
@@ -255,9 +262,10 @@ window.VV = (function(){
       statusElement.parentElement.hidden = false;
       statusElement.parentElement.dataset.state = status;
       if(error) statusElement.title = error.message || String(error);
+      else statusElement.removeAttribute("title");
     }
     if(retryButton){
-      retryButton.hidden = !["connection-error", "permission-error", "read-error", "write-error"].includes(status);
+      retryButton.hidden = !["connection-error", "permission-error", "read-error", "write-error", "loaded-backup-error"].includes(status);
       if(!retryButton.dataset.bound){
         retryButton.addEventListener("click", () => retryCloud());
         retryButton.dataset.bound = "true";
@@ -279,8 +287,10 @@ window.VV = (function(){
       if(!resolveButton.dataset.bound){
         resolveButton.addEventListener("click", () => {
           if(!window.confirm("Se conservará una copia local del conflicto, pero los datos mostrados y las próximas escrituras usarán Firestore. ¿Continuar?")) return;
-          try{ resolveCloudConflict(); }
-          catch(err){ window.alert(err.message); }
+          resolveCloudConflict().catch(err => {
+            emitCloudStatus("conflict", err);
+            window.alert(err.message || "No se pudo confirmar la lectura remota.");
+          });
         });
         resolveButton.dataset.bound = "true";
       }
@@ -426,14 +436,51 @@ window.VV = (function(){
     }
   }
 
-  function resolveCloudConflict(){
+  function cacheConfirmedRemoteState(state, preserveConfirmedCache){
+    const local = persistentLocalState();
+    const localHasData = hasLocalBusinessData(local);
+    const localSignature = stateSignature(local);
+    const remoteSignature = stateSignature(state);
+    let cachedSignature = null;
+    try{ cachedSignature = localStorage.getItem(CLOUD_CACHE_MARKER); }catch(err){ /* optional cache */ }
+    const localWasModified = !cachedSignature || cachedSignature !== localSignature;
+    const needsBackup = cloudLocalBackupPending || (localHasData
+      && localSignature !== remoteSignature
+      && (preserveConfirmedCache || localWasModified));
+    if(needsBackup && !preserveLocalConflict(local)){
+      cloudLocalBackupPending = true;
+      return false;
+    }
+    cloudLocalBackupPending = false;
+    cacheRemoteState(state);
+    return true;
+  }
+
+  async function resolveCloudConflict(){
     if(!cloudConflict || !cloudState) throw new Error("No hay un conflicto local pendiente.");
+    if(!cloudRef) throw new Error("Firestore todavía no está conectado; no se resolvió el conflicto.");
+    let snapshot;
+    try{
+      snapshot = await cloudRef.get({ source: "server" });
+    }catch(err){
+      throw new Error("No se pudo confirmar una lectura actual de Firestore: " + (err.message || "error de lectura."));
+    }
+    if(!snapshot.exists) throw new Error("Firestore no contiene el documento remoto. No se modificó la copia local.");
+    const remote = normalizedState(snapshot.data());
+    const validationError = cloudStateValidationError(remote);
+    if(validationError) throw new Error("Firestore no contiene un estado operativo válido: " + validationError.message);
+    cloudState = remote;
+    cloudRemoteExists = true;
+    if(!cacheConfirmedRemoteState(remote, true)){
+      cloudBackupReady = false;
+      throw new Error("No se pudo guardar el respaldo local; no se aplicó la resolución.");
+    }
+    cloudBackupReady = true;
     if(!cloudBackupReady) throw new Error("No se pudo confirmar que la copia local esté respaldada; no se resolvió el conflicto.");
     if(!cloudRemoteExists) throw new Error("Firestore no tiene una copia remota que pueda elegirse. Se requiere revisar y autorizar una recuperación local.");
     cloudConflict = false;
     cloudReady = true;
-    cacheRemoteState(cloudState);
-    emitCloudStatus("loaded");
+    emitCloudReadyStatus();
     window.dispatchEvent(new CustomEvent("vv:cloud-sync"));
   }
 
@@ -456,27 +503,13 @@ window.VV = (function(){
       cloudReady = false;
       return false;
     }
-    const local = persistentLocalState();
-    let previousSignature = null;
-    try{ previousSignature = localStorage.getItem(CLOUD_CACHE_MARKER); }catch(err){ /* optional cache */ }
-    const localChangedSinceCache = hasLocalBusinessData(local)
-      && previousSignature && previousSignature !== stateSignature(local);
-    const untrackedLocalConflict = !previousSignature && hasLocalBusinessData(local)
-      && stateSignature(local) !== stateSignature(state);
-    if(initial && (localChangedSinceCache || untrackedLocalConflict)){
-      cloudConflict = true;
-      cloudReady = false;
-      cloudBackupReady = preserveLocalConflict(local);
-      cloudState = state;
-      cloudRemoteExists = true;
-      emitCloudStatus("conflict", new Error("Hay datos locales que no coinciden con Firestore. Se conservaron sin sobrescribirlos; las escrituras están pausadas."));
-      window.dispatchEvent(new CustomEvent("vv:cloud-sync"));
-      return false;
-    }
     cloudState = state;
+    cloudRemoteExists = true;
+    cloudConflict = false;
     cloudReady = true;
-    cacheRemoteState(state);
-    emitCloudStatus("loaded");
+    const cacheReady = cacheConfirmedRemoteState(state, initial);
+    emitCloudStatus(cacheReady ? "loaded" : "loaded-backup-error",
+      cacheReady ? null : new Error("La lectura remota fue válida, pero no se pudo respaldar la caché local divergente."));
     window.dispatchEvent(new CustomEvent("vv:cloud-sync"));
     return true;
   }
@@ -534,11 +567,11 @@ window.VV = (function(){
           return false;
         }
         if(!initialSnapshot.exists || Object.keys(initialSnapshot.data() || {}).length === 0){
-          cloudRemoteExists = initialSnapshot.exists;
+          cloudRemoteExists = false;
           const local = persistentLocalState();
           if(hasLocalBusinessData(local)){
             cloudConflict = true;
-            cloudState = emptyCloudState();
+            cloudState = null;
             cloudBackupReady = preserveLocalConflict(local);
             emitCloudStatus("conflict", new Error("Firestore no contiene el documento, pero este dispositivo conserva registros locales. No se subió ni eliminó ningún dato."));
           }else{
@@ -585,38 +618,23 @@ window.VV = (function(){
           if(snapshot.metadata && snapshot.metadata.fromCache) return;
           if(!snapshot.exists){
             cloudRemoteExists = false;
-            if(cloudConflict){
-              emitCloudStatus("conflict", new Error("Firestore no contiene el documento y este dispositivo conserva datos locales."));
-              return;
-            }
             cloudReady = false;
+            cloudConflict = false;
+            cloudState = null;
             emitCloudStatus("read-error", new Error("El documento de Firestore fue eliminado mientras la aplicación estaba abierta."));
             return;
           }
           try{
             const next = normalizedState(snapshot.data());
-            cloudRemoteExists = true;
             const validationError = cloudStateValidationError(next);
-            if(validationError) throw validationError;
-            cloudState = next;
-            let cachedSignature = null;
-            try{ cachedSignature = localStorage.getItem(CLOUD_CACHE_MARKER); }catch(err){ /* optional cache */ }
-            const local = persistentLocalState();
-            if(!cloudConflict && hasLocalBusinessData(local) && cachedSignature
-              && cachedSignature !== stateSignature(local)){
-              cloudConflict = true;
-              cloudReady = false;
-              cloudBackupReady = preserveLocalConflict(local);
-              emitCloudStatus("conflict", new Error("La caché local cambió fuera de la sincronización. Se guardó una copia y las escrituras están pausadas."));
-              window.dispatchEvent(new CustomEvent("vv:cloud-sync"));
-              return;
+            if(validationError){
+              if(cloudConflict){
+                emitCloudStatus("conflict", validationError);
+                return;
+              }
+              throw validationError;
             }
-            if(!cloudConflict){
-              cloudReady = true;
-              cacheRemoteState(next);
-              emitCloudStatus("loaded");
-            }
-            window.dispatchEvent(new CustomEvent("vv:cloud-sync"));
+            installRemoteState(next, false);
           }catch(err){
             cloudReady = false;
             emitCloudStatus("read-error", err);
@@ -731,8 +749,9 @@ window.VV = (function(){
         return { state: changed ? state : latest, result: operationResult };
       });
       cloudState = result.state;
-      cacheRemoteState(result.state);
+      cacheConfirmedRemoteState(result.state, false);
       window.dispatchEvent(new CustomEvent("vv:cloud-sync"));
+      if(cloudLocalBackupPending) emitCloudReadyStatus();
       return result.result;
     }catch(err){
       emitCloudStatus(classifyCloudError(err, "write"), err);
@@ -773,6 +792,54 @@ window.VV = (function(){
     return result;
   }
 
+  function requireKnownRemoteRecords(incoming, remoteRecords, label){
+    if(!Array.isArray(incoming)) throw new TypeError("La lista de " + label + " debe ser un arreglo.");
+    const remoteIds = new Set();
+    const legacyCounts = new Map();
+    (Array.isArray(remoteRecords) ? remoteRecords : []).forEach(item => {
+      if(item && item.id) remoteIds.add(item.id);
+      else{
+        const key = JSON.stringify(item);
+        legacyCounts.set(key, (legacyCounts.get(key) || 0) + 1);
+      }
+    });
+    const incomingLegacyCounts = new Map();
+    incoming.forEach(item => {
+      if(item && item.id){
+        if(!remoteIds.has(item.id)){
+          throw new Error("No se guardó la lista de " + label + ": contiene registros que no están confirmados en Firestore. Usa la operación individual correspondiente.");
+        }
+        return;
+      }
+      const key = JSON.stringify(item);
+      const count = (incomingLegacyCounts.get(key) || 0) + 1;
+      incomingLegacyCounts.set(key, count);
+      if(count > (legacyCounts.get(key) || 0)){
+        throw new Error("No se guardó la lista de " + label + ": contiene registros sin ID que no están confirmados en Firestore.");
+      }
+    });
+  }
+
+  function removeArchivedRecords(records, archivedRecords){
+    const archivedIds = new Set();
+    const legacyCounts = new Map();
+    archivedRecords.forEach(item => {
+      if(item && item.id) archivedIds.add(item.id);
+      else{
+        const key = JSON.stringify(item);
+        legacyCounts.set(key, (legacyCounts.get(key) || 0) + 1);
+      }
+    });
+    return records.filter(item => {
+      if(item && item.id) return !archivedIds.has(item.id);
+      const key = JSON.stringify(item);
+      const count = legacyCounts.get(key) || 0;
+      if(!count) return true;
+      legacyCounts.set(key, count - 1);
+      return false;
+    });
+  }
+
   /* ---------- Ventas del día / archivo mensual ---------- */
   function loadDay(){
     const openDay = getOpenDay();
@@ -783,6 +850,7 @@ window.VV = (function(){
   function saveDay(day){
     return transactCloud(state => {
       const current = state.vv_day_sales || { items: [] };
+      requireKnownRemoteRecords(day.items, current.items, "ventas del turno");
       const merged = {
         ...current,
         ...day,
@@ -802,6 +870,7 @@ window.VV = (function(){
   }
   function saveArchive(arr){
     return transactCloud(state => {
+      requireKnownRemoteRecords(arr, state.vv_archive, "ventas archivadas");
       const merged = mergeRecords(state.vv_archive, arr);
       return { state: { ...state, vv_archive: merged }, result: merged, changed: true };
     });
@@ -809,10 +878,15 @@ window.VV = (function(){
 
   function archiveItems(date, items){
     return transactCloud(state => {
+      const currentDay = state.vv_day_sales || { items: [] };
+      requireKnownRemoteRecords(items, (state.vv_archive || []).concat(
+        Array.isArray(currentDay.items) ? currentDay.items : []
+      ), "ventas para archivar");
       const archive = mergeRecords(state.vv_archive, items.map(item => ({
         ...item, date: item.businessDate || date
       })));
-      return { state: { ...state, vv_archive: archive }, result: archive, changed: true };
+      const day = { ...currentDay, items: removeArchivedRecords(currentDay.items || [], items) };
+      return { state: { ...state, vv_archive: archive, vv_day_sales: day }, result: archive, changed: true };
     });
   }
 
@@ -884,7 +958,7 @@ window.VV = (function(){
         return { state: next, result: invoice, changed: true };
       });
       clearPendingOperation("sale", payload);
-      emitCloudStatus("loaded");
+      emitCloudReadyStatus();
       return invoiceNumber;
     }catch(err){
       throw err;
@@ -901,6 +975,7 @@ window.VV = (function(){
   function saveExpenseDay(day){
     return transactCloud(state => {
       const current = state.vv_expense_day || { items: [] };
+      requireKnownRemoteRecords(day.items, current.items, "gastos del turno");
       const merged = { ...current, ...day, items: mergeRecords(current.items, day.items) };
       return { state: { ...state, vv_expense_day: merged }, result: merged, changed: true };
     });
@@ -916,6 +991,7 @@ window.VV = (function(){
   }
   function saveExpenseArchive(arr){
     return transactCloud(state => {
+      requireKnownRemoteRecords(arr, state.vv_expense_archive, "gastos archivados");
       const merged = mergeRecords(state.vv_expense_archive, arr);
       return { state: { ...state, vv_expense_archive: merged }, result: merged, changed: true };
     });
@@ -923,10 +999,15 @@ window.VV = (function(){
 
   function archiveExpenseItems(date, items){
     return transactCloud(state => {
+      const currentDay = state.vv_expense_day || { items: [] };
+      requireKnownRemoteRecords(items, (state.vv_expense_archive || []).concat(
+        Array.isArray(currentDay.items) ? currentDay.items : []
+      ), "gastos para archivar");
       const archive = mergeRecords(state.vv_expense_archive, items.map(item => ({
         ...item, date: item.businessDate || date
       })));
-      return { state: { ...state, vv_expense_archive: archive }, result: archive, changed: true };
+      const day = { ...currentDay, items: removeArchivedRecords(currentDay.items || [], items) };
+      return { state: { ...state, vv_expense_archive: archive, vv_expense_day: day }, result: archive, changed: true };
     });
   }
 
@@ -977,7 +1058,7 @@ window.VV = (function(){
       return { state: { ...state, vv_expense_day: nextDay }, result: nextDay, changed: true };
     });
     clearPendingOperation("expense", payload);
-    emitCloudStatus("loaded");
+    emitCloudReadyStatus();
     return result;
   }
 
