@@ -48,6 +48,13 @@
   </div>
 </header>
 
+<div class="cloud-status" id="cloudStatus" data-state="initializing" role="status" aria-live="polite">
+  <span id="cloudStatusText">Conectando con Firestore…</span>
+  <button type="button" id="retryCloud" hidden>Reintentar</button>
+  <button type="button" id="retryPending" hidden>Reintentar operaciones pendientes</button>
+  <button type="button" id="useRemoteData" hidden>Usar Firestore y conservar copia local</button>
+</div>
+
 <main class="wrap">
 
   <nav class="tabs" role="tablist">
@@ -161,6 +168,10 @@
     location.href = "login.html";
   });
   window.VV.initCloud();
+  window.addEventListener("pagehide", window.VV.disposeCloud);
+  window.addEventListener("pageshow", function(event){
+    if(event.persisted) window.VV.initCloud();
+  });
 </script>
 </body>
 </html>

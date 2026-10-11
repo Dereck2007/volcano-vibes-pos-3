@@ -1,7 +1,7 @@
 (function(){
   "use strict";
   const {
-    SUPPLIES, CRC, getOpenDay,
+    SUPPLIES, CRC, escapeHtml, getOpenDay,
     loadExpenseDay, getOpenDayExpenses, getExpenseMonthRows, registerExpense
   } = window.VV;
 
@@ -25,7 +25,7 @@
       row.className = "cart-row cart-row--editable";
       row.innerHTML = `
         <div class="cart-row__info">
-          <span class="cart-row__name">${item.name}</span>
+          <span class="cart-row__name">${escapeHtml(item.name)}</span>
         </div>
         <div class="cart-row__qty">
           <input type="number" class="expense-input expense-input--qty" min="1" value="${item.qty}" aria-label="Cantidad">
@@ -86,16 +86,27 @@
     renderCart();
   });
 
-  document.getElementById("btnRegistrar").addEventListener("click", () => {
-    if(cart.length === 0){ toast("Agrega al menos un producto a la compra."); return; }
+  let isRegistering = false;
+  document.getElementById("btnRegistrar").addEventListener("click", async () => {
+    if(cart.length === 0 || isRegistering){ if(cart.length === 0) toast("Agrega al menos un producto a la compra."); return; }
     const sinPrecio = cart.some(i => !i.price || i.price <= 0);
     if(sinPrecio){ toast("Falta digitar el precio de uno o más productos."); return; }
 
-    registerExpense(cart);
-    cart = [];
-    renderCart();
-    renderReport();
-    toast("Gasto registrado \u2713");
+    const button = document.getElementById("btnRegistrar");
+    isRegistering = true;
+    button.disabled = true;
+    try{
+      await registerExpense(cart);
+      cart = [];
+      renderCart();
+      renderReport();
+      toast("Gasto registrado \u2713");
+    }catch(err){
+      toast("No se confirmó el gasto en Firestore. " + (err.message || "Reintenta sin vaciar la compra."));
+    }finally{
+      isRegistering = false;
+      button.disabled = false;
+    }
   });
 
   /* ---------- Tabs del reporte ---------- */
@@ -119,6 +130,19 @@
 
   /* ---------- Reporte de gastos ---------- */
   function renderReport(){
+    document.getElementById("btnRegistrar").disabled = !window.VV.isCloudReady();
+    if(!window.VV.hasCloudSnapshot()){
+      ["statGastosHoy", "statComprasHoy", "statTotalMes"].forEach(id => {
+        document.getElementById(id).textContent = "—";
+      });
+      document.querySelector("#tableDay tbody").innerHTML = "";
+      document.querySelector("#tableMonth tbody").innerHTML = "";
+      document.getElementById("emptyDay").textContent = "No se recibieron datos de Firestore.";
+      document.getElementById("emptyMonth").textContent = "No se recibieron datos de Firestore.";
+      document.getElementById("emptyDay").style.display = "block";
+      document.getElementById("emptyMonth").style.display = "block";
+      return;
+    }
     day = loadExpenseDay();
     const todayExpenses = getOpenDayExpenses();
     const gastosHoy = todayExpenses.reduce((s,i) => s + i.total, 0);
@@ -135,7 +159,7 @@
     document.getElementById("emptyDay").style.display = todayExpenses.length ? "none" : "block";
     [...todayExpenses].reverse().forEach(it => {
       const tr = document.createElement("tr");
-      tr.innerHTML = `<td>${it.time}</td><td>${it.product}</td><td class="num">${it.qty}</td><td class="num money">${CRC(it.total)}</td>`;
+      tr.innerHTML = `<td>${escapeHtml(it.time)}</td><td>${escapeHtml(it.product)}</td><td class="num">${it.qty}</td><td class="num money">${CRC(it.total)}</td>`;
       dayBody.appendChild(tr);
     });
 
@@ -144,7 +168,7 @@
     document.getElementById("emptyMonth").style.display = monthRows.length ? "none" : "block";
     monthRows.forEach(r => {
       const tr = document.createElement("tr");
-      tr.innerHTML = `<td>${r.product}</td><td class="num">${r.qty}</td><td class="num money">${CRC(r.total)}</td>`;
+      tr.innerHTML = `<td>${escapeHtml(r.product)}</td><td class="num">${r.qty}</td><td class="num money">${CRC(r.total)}</td>`;
       monthBody.appendChild(tr);
     });
   }
@@ -210,4 +234,5 @@
   renderCart();
   renderReport();
   window.addEventListener("vv:cloud-sync", renderReport);
+  window.addEventListener("vv:cloud-status", renderReport);
 })();

@@ -1,6 +1,6 @@
 (function(){
   "use strict";
-  const { NEGOCIO, PRODUCTS, CATEGORIES, CRC, registerSale, nextInvoiceNumber } = window.VV;
+  const { NEGOCIO, CATEGORIES, CRC, escapeHtml, registerSale, getProducts } = window.VV;
 
   let activeCat = "todos";
   let cart = []; // { id, name, price, qty }
@@ -25,19 +25,20 @@
   const productGrid = document.getElementById("productGrid");
   function renderGrid(){
     productGrid.innerHTML = "";
-    const list = activeCat === "todos" ? PRODUCTS : PRODUCTS.filter(p => p.cat === activeCat);
+    const products = getProducts();
+    const list = activeCat === "todos" ? products : products.filter(p => p.cat === activeCat);
     list.forEach(p => {
       const card = document.createElement("article");
       card.className = "product-card";
       const priceText = p.displayPrice || CRC(p.price);
       card.innerHTML = `
         <div class="product-card__body">
-          <h3>${p.name}</h3>
-          <p>${p.desc}</p>
+          <h3>${escapeHtml(p.name)}</h3>
+          <p>${escapeHtml(p.desc)}</p>
         </div>
         <div class="product-card__foot">
-          <span class="product-card__price">${priceText}</span>
-          <button type="button" class="product-card__add" aria-label="Agregar ${p.name}">+</button>
+          <span class="product-card__price">${escapeHtml(priceText)}</span>
+          <button type="button" class="product-card__add" aria-label="Agregar ${escapeHtml(p.name)}">+</button>
         </div>`;
       card.querySelector(".product-card__add").addEventListener("click", () => addToCart(p));
       productGrid.appendChild(card);
@@ -81,7 +82,7 @@
       row.className = "cart-row";
       row.innerHTML = `
         <div class="cart-row__info">
-          <span class="cart-row__name">${item.name}</span>
+          <span class="cart-row__name">${escapeHtml(item.name)}</span>
           <span class="cart-row__unit">${CRC(item.price)} c/u</span>
         </div>
         <div class="cart-row__qty">
@@ -116,19 +117,28 @@
   });
 
   /* Cobro directo: registra la venta de inmediato (efectivo o tarjeta) y limpia el carrito. */
-  function cobrar(method){
-    if(cart.length === 0) return;
+  let isCharging = false;
+  async function cobrar(method){
+    if(cart.length === 0 || isCharging) return;
     const { subtotal, iva, total } = totals();
-
-    fillTicket({ subtotal, iva, total, cash: total, change: 0 });
-    registerSale(cart, method);
-
-    payOverlay.hidden = true;
-    cart = [];
-    renderCart();
-    toast(method === "cash"
-      ? "Venta cobrada en efectivo correctamente \u2713"
-      : "Venta cobrada con tarjeta correctamente \u2713");
+    const buttons = [document.getElementById("btnPayCash"), document.getElementById("btnPayCard")];
+    isCharging = true;
+    buttons.forEach(button => { button.disabled = true; });
+    try{
+      const invoiceNumber = await registerSale(cart, method);
+      fillTicket({ subtotal, iva, total, cash: total, change: 0, invoiceNumber });
+      payOverlay.hidden = true;
+      cart = [];
+      renderCart();
+      toast(method === "cash"
+        ? "Venta cobrada en efectivo correctamente \u2713"
+        : "Venta cobrada con tarjeta correctamente \u2713");
+    }catch(err){
+      toast("No se confirmó la venta en Firestore. " + (err.message || "Reintenta sin vaciar el carrito."));
+    }finally{
+      isCharging = false;
+      buttons.forEach(button => { button.disabled = false; });
+    }
   }
 
   document.getElementById("btnPayCash").addEventListener("click", () => cobrar("cash"));
@@ -140,7 +150,7 @@
   payOverlay.addEventListener("click", e => { if(e.target === payOverlay) payOverlay.hidden = true; });
 
   /* ---------- Plantilla de factura simple ---------- */
-  function fillTicket({ subtotal, iva, total, cash, change }){
+  function fillTicket({ subtotal, iva, total, cash, change, invoiceNumber }){
     const now = new Date();
     document.getElementById("tkNombre").textContent = NEGOCIO.nombre;
     document.getElementById("tkFecha").textContent = now.toLocaleDateString("es-CR", {
@@ -148,7 +158,7 @@
     }) + " " + now.toLocaleTimeString("es-CR", {
       hour: "2-digit", minute: "2-digit", hourCycle: "h23"
     });
-    document.getElementById("tkNumero").textContent = "FACTURA SIMPLIFICADA: " + nextInvoiceNumber();
+    document.getElementById("tkNumero").textContent = "FACTURA SIMPLIFICADA: " + invoiceNumber;
     document.getElementById("tkCedula").textContent = NEGOCIO.cedula;
     document.getElementById("tkTelefono").textContent = NEGOCIO.telefono;
 
@@ -156,7 +166,7 @@
     itemsBody.innerHTML = "";
     cart.forEach(item => {
       const tr = document.createElement("tr");
-      tr.innerHTML = `<td>${item.qty}x ${item.name}</td><td class="num">${CRC(item.price * item.qty)}</td>`;
+      tr.innerHTML = `<td>${item.qty}x ${escapeHtml(item.name)}</td><td class="num">${CRC(item.price * item.qty)}</td>`;
       itemsBody.appendChild(tr);
     });
 
@@ -188,5 +198,6 @@
     renderCart();
   }
   window.addEventListener("pageshow", resetScreen);
+  window.addEventListener("vv:cloud-sync", renderGrid);
   resetScreen();
 })();

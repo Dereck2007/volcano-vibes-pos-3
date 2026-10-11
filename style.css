@@ -53,6 +53,38 @@ body{
   border-bottom: 1px solid var(--line);
 }
 
+.cloud-status{
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 42px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  font-size: 13px;
+  text-align: center;
+}
+.cloud-status[data-state="loaded"]{ color: var(--lime); }
+.cloud-status[data-state="empty"]{ color: var(--gold); }
+.cloud-status[data-state="conflict"],
+.cloud-status[data-state="connection-error"],
+.cloud-status[data-state="permission-error"],
+.cloud-status[data-state="read-error"],
+.cloud-status[data-state="write-error"]{ color: #ff8d8d; }
+.cloud-status button{
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  padding: 5px 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
 .brand{ display:flex; align-items:center; gap: 12px; }
 .brand__flame{ width: 40px; height: 40px; flex-shrink: 0; }
 .brand__text h1{

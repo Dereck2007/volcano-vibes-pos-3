@@ -1,7 +1,7 @@
 (function(){
   "use strict";
   const {
-    CRC, monthKey, getOpenDay, loadDay, loadArchive, loadExpenseDay, loadExpenseArchive,
+    CRC, escapeHtml, monthKey, getOpenDay, loadDay, loadArchive, loadExpenseDay, loadExpenseArchive,
     getMonthRows, getOpenDaySales, getOpenDayExpenses, closeOpenDay
   } = window.VV;
 
@@ -61,10 +61,41 @@
     return loadArchive().concat(loadDay().items)
       .filter(item => item.businessDate && monthKey(item.businessDate) === month);
   }
+  function uniqueExpenseRecords(records){
+    const seen = new Set();
+    return records.filter(item => {
+      const id = item && (item.id || item.operationId);
+      if(!id) return true;
+      if(seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+  }
+  function getTodayExpenses(){
+    return uniqueExpenseRecords(getOpenDayExpenses())
+      .sort((a, b) => (Number(a.ts) || 0) - (Number(b.ts) || 0));
+  }
   function getMonthExpenses(){
     const month = monthKey(getOpenDay().businessDate);
-    return loadExpenseArchive().concat(loadExpenseDay().items)
-      .filter(item => item.businessDate && monthKey(item.businessDate) === month);
+    return uniqueExpenseRecords(loadExpenseArchive().concat(loadExpenseDay().items)
+      .filter(item => item.businessDate && monthKey(item.businessDate) === month))
+      .sort((a, b) => (Number(a.ts) || 0) - (Number(b.ts) || 0));
+  }
+  function expenseReportRow(expense){
+    const date = expense.businessDate || expense.date || "";
+    const timestamp = Number(expense.ts) || Date.parse(expense.createdAt);
+    const derivedDate = date || (Number.isFinite(timestamp) && timestamp
+      ? new Date(timestamp).getFullYear() + "-" + String(new Date(timestamp).getMonth() + 1).padStart(2, "0")
+        + "-" + String(new Date(timestamp).getDate()).padStart(2, "0")
+      : "");
+    return {
+      date: derivedDate,
+      time: expense.time || "",
+      description: expense.product || expense.description || expense.concept || expense.name || "",
+      category: expense.category || expense.categoryName || expense.cat || "",
+      qty: Number(expense.qty) || 0,
+      amount: Number(expense.total) || 0
+    };
   }
 
   /* ---------- Ventas, pagos y ganancia neta (hoy y mes) ---------- */
@@ -73,7 +104,7 @@
     const salesMonth = getMonthSales();
     const ventasHoy = sumTotal(salesDay);
     const ventasMes = sumTotal(salesMonth);
-    const gastosHoy = sumTotal(getOpenDayExpenses());
+    const gastosHoy = sumTotal(getTodayExpenses());
     const gastosMes = sumTotal(getMonthExpenses());
 
     return {
@@ -115,6 +146,21 @@
 
   /* ---------- Render ---------- */
   function renderAll(){
+    closeButton.disabled = !window.VV.isCloudReady();
+    if(!window.VV.hasCloudSnapshot()){
+      document.getElementById("openDayInfo").textContent = "Esperando datos de Firestore; las cifras aún no están disponibles.";
+      ["statVentasHoy", "statPlatosHoy", "statTotalMes", "pfVentasHoy", "pfGastosHoy",
+        "pfGananciaHoy", "pfVentasMes", "pfGastosMes", "pfGananciaMes"].forEach(id => {
+        document.getElementById(id).textContent = "—";
+      });
+      document.querySelector("#tableDay tbody").innerHTML = "";
+      document.querySelector("#tableMonth tbody").innerHTML = "";
+      document.getElementById("emptyDay").textContent = "No se recibieron datos de Firestore.";
+      document.getElementById("emptyMonth").textContent = "No se recibieron datos de Firestore.";
+      document.getElementById("emptyDay").style.display = "block";
+      document.getElementById("emptyMonth").style.display = "block";
+      return;
+    }
     day = loadDay();
     const openDay = getOpenDay();
     document.getElementById("openDayInfo").textContent = "Turno abierto desde " + new Date(openDay.openedAt).toLocaleString("es-CR");
@@ -135,7 +181,7 @@
     document.getElementById("emptyDay").style.display = todaySales.length ? "none" : "block";
     [...todaySales].reverse().forEach(it => {
       const tr = document.createElement("tr");
-      tr.innerHTML = `<td>${it.time}</td><td>${it.product}</td><td class="num">${it.qty}</td><td class="num money">${CRC(it.total)}</td>`;
+      tr.innerHTML = `<td>${escapeHtml(it.time)}</td><td>${escapeHtml(it.product)}</td><td class="num">${it.qty}</td><td class="num money">${CRC(it.total)}</td>`;
       dayBody.appendChild(tr);
     });
 
@@ -144,18 +190,31 @@
     document.getElementById("emptyMonth").style.display = monthRows.length ? "none" : "block";
     monthRows.forEach(r => {
       const tr = document.createElement("tr");
-      tr.innerHTML = `<td>${r.product}</td><td class="num">${r.qty}</td><td class="num money">${CRC(r.total)}</td>`;
+      tr.innerHTML = `<td>${escapeHtml(r.product)}</td><td class="num">${r.qty}</td><td class="num money">${CRC(r.total)}</td>`;
       monthBody.appendChild(tr);
     });
   }
 
   /* ---------- Cierre del día ---------- */
-  document.getElementById("btnCierreDia").addEventListener("click", () => {
+  const closeButton = document.getElementById("btnCierreDia");
+  let isClosing = false;
+  closeButton.addEventListener("click", async () => {
+    if(isClosing) return;
+    const dayId = getOpenDay().id;
     const ok = confirm("¿Cerrar el día? Las cifras de hoy volverán a ₡0. Lo registrado queda guardado.");
     if(!ok) return;
-    closeOpenDay();
-    renderAll();
-    toast("Día cerrado correctamente.");
+    isClosing = true;
+    closeButton.disabled = true;
+    try{
+      await closeOpenDay(dayId);
+      renderAll();
+      toast("Día cerrado correctamente.");
+    }catch(err){
+      toast("No se pudo cerrar el turno en Firestore. " + (err.message || "Revisa la conexión e inténtalo de nuevo."));
+    }finally{
+      isClosing = false;
+      closeButton.disabled = false;
+    }
   });
 
   /* =========================================================
@@ -185,6 +244,10 @@
       const report = getReportContext();
       const salesToday = [...getTodaySales()].sort((a, b) => (a.ts || 0) - (b.ts || 0));
       const monthRows = getMonthRows(loadDay());
+      const expensesToday = getTodayExpenses();
+      const expensesMonth = getMonthExpenses();
+      const expensesTodayTotal = sumTotal(expensesToday);
+      const expensesMonthTotal = sumTotal(expensesMonth);
 
       const pageWidth = doc.internal.pageSize.getWidth();
       const pageHeight = doc.internal.pageSize.getHeight();
@@ -338,6 +401,76 @@
         columnStyles: { 1: { halign: "center", cellWidth: 20 }, 2: { halign: "right", cellWidth: 44 } }
       });
 
+      /* --- Detalle: gastos del día --- */
+      doc.addPage();
+      doc.setTextColor(15, 20, 24);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(15);
+      doc.text("Gastos del día", left, 20);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      doc.setTextColor(90, 90, 90);
+      doc.text(`Fecha del reporte: ${report.date}`, left, 27);
+
+      doc.autoTable({
+        startY: 32,
+        margin: { left, right: left },
+        head: [["Fecha", "Hora", "Descripción", "Categoría", "Cant.", "Importe"]],
+        body: expensesToday.length
+          ? expensesToday.map(expense => {
+            const row = expenseReportRow(expense);
+            return [row.date, row.time, row.description, row.category, String(row.qty), pdfMoney(row.amount)];
+          })
+          : [[{ content: "Sin gastos registrados durante este día.", colSpan: 6, styles: { halign: "center", textColor: [120, 120, 120] } }]],
+        foot: [["", "", "", "", "TOTAL DEL DÍA", pdfMoney(expensesTodayTotal)]],
+        showFoot: "lastPage",
+        theme: "striped",
+        styles: { font: "helvetica", fontSize: 9, cellPadding: 2.6 },
+        headStyles: { fillColor: RED, textColor: [255, 255, 255] },
+        footStyles: { fillColor: DARK, textColor: [255, 255, 255], fontStyle: "bold" },
+        alternateRowStyles: { fillColor: [247, 248, 250] },
+        columnStyles: {
+          0: { cellWidth: 24 }, 1: { cellWidth: 16 },
+          3: { cellWidth: 25 }, 4: { halign: "center", cellWidth: 14 },
+          5: { halign: "right", cellWidth: 32 }
+        }
+      });
+
+      /* --- Detalle: gastos del mes --- */
+      doc.addPage();
+      doc.setTextColor(15, 20, 24);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(15);
+      doc.text("Gastos del mes", left, 20);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      doc.setTextColor(90, 90, 90);
+      doc.text(report.monthLabel, left, 27);
+
+      doc.autoTable({
+        startY: 32,
+        margin: { left, right: left },
+        head: [["Fecha", "Hora", "Descripción", "Categoría", "Cant.", "Importe"]],
+        body: expensesMonth.length
+          ? expensesMonth.map(expense => {
+            const row = expenseReportRow(expense);
+            return [row.date, row.time, row.description, row.category, String(row.qty), pdfMoney(row.amount)];
+          })
+          : [[{ content: "Sin gastos registrados durante este mes.", colSpan: 6, styles: { halign: "center", textColor: [120, 120, 120] } }]],
+        foot: [["", "", "", "", "TOTAL DEL MES", pdfMoney(expensesMonthTotal)]],
+        showFoot: "lastPage",
+        theme: "striped",
+        styles: { font: "helvetica", fontSize: 9, cellPadding: 2.6 },
+        headStyles: { fillColor: RED, textColor: [255, 255, 255] },
+        footStyles: { fillColor: DARK, textColor: [255, 255, 255], fontStyle: "bold" },
+        alternateRowStyles: { fillColor: [247, 248, 250] },
+        columnStyles: {
+          0: { cellWidth: 24 }, 1: { cellWidth: 16 },
+          3: { cellWidth: 25 }, 4: { halign: "center", cellWidth: 14 },
+          5: { halign: "right", cellWidth: 32 }
+        }
+      });
+
       /* --- Pie de página en todas las hojas --- */
       const pages = doc.internal.getNumberOfPages();
       for(let i = 1; i <= pages; i++){
@@ -370,6 +503,10 @@
       const report = getReportContext();
       const salesToday = [...getTodaySales()].sort((a, b) => (a.ts || 0) - (b.ts || 0));
       const monthRows = getMonthRows(loadDay());
+      const expensesToday = getTodayExpenses();
+      const expensesMonth = getMonthExpenses();
+      const expensesTodayTotal = sumTotal(expensesToday);
+      const expensesMonthTotal = sumTotal(expensesMonth);
 
       const FMT = '"₡"#,##0;[Red]-"₡"#,##0';
       const fill = rgb => ({ patternType: "solid", fgColor: { rgb } });
@@ -521,10 +658,59 @@
       setStyle(wsMonth, monthTotalRow, 1, { font: font({ bold: true, color: { rgb: "FFFFFF" } }), fill: fill("162334"), border: box, alignment: { horizontal: "center", vertical: "center" } });
       setStyle(wsMonth, monthTotalRow, 2, { font: font({ bold: true, color: { rgb: "FFFFFF" } }), fill: fill("162334"), border: box, numFmt: FMT, alignment: { horizontal: "right", vertical: "center" } });
 
+      const expenseSheet = (expenses, total, totalLabel) => {
+        const headers = ["Fecha", "Hora", "Descripción", "Categoría", "Cantidad", "Importe"];
+        const rows = [headers];
+        expenses.forEach(expense => {
+          const row = expenseReportRow(expense);
+          rows.push([row.date, row.time, row.description, row.category, row.qty, row.amount]);
+        });
+        const totalRow = rows.length;
+        rows.push(["", "", "", "", totalLabel, total]);
+        const worksheet = XLSX.utils.aoa_to_sheet(rows);
+        worksheet["!cols"] = [{ wch: 14 }, { wch: 10 }, { wch: 38 }, { wch: 22 }, { wch: 12 }, { wch: 16 }];
+        headers.forEach((header, column) => {
+          setStyle(worksheet, 0, column, {
+            font: font({ bold: true, color: { rgb: "FFFFFF" } }),
+            fill: fill("B63835"),
+            border: box,
+            alignment: { horizontal: column === 4 ? "center" : column === 5 ? "right" : "left", vertical: "center", wrapText: true }
+          });
+        });
+        for(let row = 1; row < totalRow; row++){
+          for(let column = 0; column < headers.length; column++){
+            const money = column === 5;
+            setStyle(worksheet, row, column, {
+              font: font(),
+              border: box,
+              fill: fill(row % 2 === 0 ? "F7F8FA" : "FFFFFF"),
+              numFmt: money ? FMT : undefined,
+              alignment: { horizontal: money ? "right" : column === 4 ? "center" : "left", vertical: "center" }
+            });
+          }
+        }
+        for(let column = 0; column < headers.length; column++){
+          const money = column === 5;
+          setStyle(worksheet, totalRow, column, {
+            font: font({ bold: true, color: { rgb: "FFFFFF" } }),
+            fill: fill("162334"),
+            border: box,
+            numFmt: money ? FMT : undefined,
+            alignment: { horizontal: money ? "right" : column === 4 ? "center" : "left", vertical: "center" }
+          });
+        }
+        worksheet["!autofilter"] = { ref: "A1:F" + totalRow };
+        return worksheet;
+      };
+      const wsExpensesDay = expenseSheet(expensesToday, expensesTodayTotal, "TOTAL DEL DÍA");
+      const wsExpensesMonth = expenseSheet(expensesMonth, expensesMonthTotal, "TOTAL DEL MES");
+
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Resumen");
       XLSX.utils.book_append_sheet(wb, wsTurn, "Ventas del turno");
       XLSX.utils.book_append_sheet(wb, wsMonth, "Acumulado del mes");
+      XLSX.utils.book_append_sheet(wb, wsExpensesDay, "Gastos del día");
+      XLSX.utils.book_append_sheet(wb, wsExpensesMonth, "Gastos del mes");
       XLSX.writeFile(wb, `volcano-vibes-reporte-${getOpenDay().businessDate}.xlsx`);
     }catch(err){
       console.error("Error al generar el Excel:", err);
@@ -546,4 +732,5 @@
   setTab("day");
   renderAll();
   window.addEventListener("vv:cloud-sync", renderAll);
+  window.addEventListener("vv:cloud-status", renderAll);
 })();

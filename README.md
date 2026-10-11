@@ -20,11 +20,13 @@
 En vez de abrir una ventana nueva (`window.open`) y escribirle el tiquete después —que es la causa típica del popup en blanco—, la factura vive **oculta dentro de la misma página** (`#printTicket`). Al cobrar, se llenan sus datos en el DOM (ya renderizados) y solo entonces se llama a `window.print()`. Una regla `@media print` oculta todo lo demás y muestra únicamente el tiquete, del ancho de una impresora térmica (78mm). No hay ventana emergente que pueda quedar a medio cargar.
 
 ## Cómo funciona el registro de ventas
-- Todo vive en `localStorage` del navegador: `vv_day_sales` (ventas del día activo) y `vv_archive` (días ya cerrados, usados para el consolidado mensual). No hay backend ni ERP conectado todavía.
-- La numeración de factura (`FS/2026/0001`, etc.) es consecutiva por año y se guarda también en `localStorage`.
+- Firestore es la fuente de verdad para `vv_day_sales` (ventas del turno activo), `vv_archive` (ventas archivadas), gastos, cierres, turno abierto y secuencia de facturas.
+- El documento compartido conserva la ruta existente `volcano_vibes/admin`; las ventas históricas guardan el nombre y precio del producto como parte de cada fila, por lo que quitar un producto del catálogo no borra ventas anteriores.
+- `localStorage` conserva una caché del último estado remoto y una cola de operaciones pendientes (`vv_pending_operations`). Un cobro o gasto solo se confirma en pantalla cuando la transacción remota se confirma. Si el resultado de una operación queda incierto, se conserva el carrito y puede reintentarse con el mismo identificador para evitar duplicados.
+- El catálogo y los insumos se leen de Firestore. Si los campos `vv_products` o `vv_supplies` no existen en un documento ya creado, la aplicación los agrega de forma aditiva con el catálogo actual; no modifica ventas, gastos, cierres ni turnos existentes.
 
 ## Cómo funciona la pantalla de Gastos
-- Es independiente de las ventas: usa sus propias llaves en `localStorage` (`vv_expense_day` y `vv_expense_archive`), así que no se mezcla con los datos de venta.
+- Los gastos usan campos separados (`vv_expense_day` y `vv_expense_archive`) en el estado compartido de Firestore; no se mezclan con los registros de venta.
 - Los "insumos frecuentes" son solo atajos con el nombre del producto — nunca traen un precio fijo, porque el precio de cada compra lo escribe siempre la persona encargada.
 - El botón "Registrar gasto" no deja guardar una fila sin precio.
 - "Cerrar día" funciona igual que en Ventas y reportes: manda los gastos de hoy al consolidado mensual.
@@ -36,24 +38,19 @@ En "Ventas y reportes" ahora hay un panel **Resumen financiero** que resta los g
 El login solo se pide una vez, al entrar por `index.html` (Punto de venta) — de ahí en adelante puedes moverte a Gastos y a Ventas y reportes sin que te lo vuelvan a pedir.
 - Usuario y contraseña por defecto: **admin / admin**. Se cambian en `store.js`, en el objeto `AUTH` (arriba del archivo).
 - "Cerrar sesión" está en la barra de navegación de cada pantalla.
-- Esto por sí solo es solo una puerta de entrada — para que los datos también viajen entre dispositivos necesitas activar la sincronización en la nube (siguiente sección). Sin eso, cada dispositivo sigue guardando su propia copia local, igual que antes.
+- Este inicio de sesión de interfaz no es Firebase Authentication ni sustituye las reglas de Firestore. Las reglas existentes deben autorizar únicamente a las identidades y operaciones previstas por el negocio.
 
-## Sincronización en la nube (para que los datos no dependan de una sola PC)
-Esto es lo que resuelve "si se daña la PC, no perder lo del mes". El sistema usa **Firebase Firestore** (gratis, de Google) como base de datos central: cualquier dispositivo con el enlace del sitio + usuario/contraseña ve y guarda la misma información.
+## Sincronización con Firestore
 
-**Por defecto viene apagado** — mientras no lo actives, la app funciona exactamente igual que antes (todo guardado solo en el navegador de esa PC). Para activarlo:
+- Antes de habilitar las operaciones, la app solicita una lectura al servidor, comprueba el turno y mantiene una suscripción `onSnapshot`. La pantalla indica conexión, carga, error de lectura/permisos o conflicto.
+- Las operaciones compartidas usan transacciones sobre el documento remoto y actualizan únicamente los campos que cambian. No se carga el caché local para sustituir el estado remoto.
+- Si encuentra datos locales distintos, conserva una copia en `vv_sync_conflict_backup` y pausa escrituras. Si hay un documento remoto válido, el operador puede elegir explícitamente **Usar Firestore y conservar copia local**. Si Firestore no contiene el documento, la aplicación no importa los datos locales automáticamente; requiere revisar la copia y autorizar un procedimiento de recuperación.
+- Las operaciones pendientes no se suben en segundo plano sin intervención. Cuando Firestore vuelve a estar disponible, se pueden reintentar explícitamente desde el indicador de estado; cada operación reutiliza un identificador idempotente.
 
-1. Ve a [console.firebase.google.com](https://console.firebase.google.com) e inicia sesión con una cuenta de Google (la del negocio, idealmente).
-2. Crea un proyecto nuevo (le puedes poner "Volcano Vibes POS"). No hace falta plan de pago.
-3. En el menú izquierdo entra a **Firestore Database** → "Crear base de datos" → modo producción → elige la región más cercana (ej. `us-central`).
-4. En **Configuración del proyecto** (el engranaje, arriba a la izquierda) → pestaña "General" → sección "Tus apps" → agrega una app web (el ícono `</>`). Le pones un nombre y Firebase te muestra un bloque `firebaseConfig = {...}`.
-5. Abre `store.js`, busca `const FIREBASE_CONFIG = {` (cerca de la línea 45) y pega ahí adentro los valores que te dio Firebase (`apiKey`, `authDomain`, `projectId`, etc.), quitando el `//` de cada línea.
-6. En Firestore, en la pestaña "Reglas", por ahora puedes dejar el modo de prueba (abierto) mientras pruebas, y luego restringirlo. Si quieres, dime y te paso una regla básica para dejarlo protegido con la cuenta admin.
-7. Sube los archivos actualizados a donde tengas el sitio (Netlify, etc.) — listo, desde ese momento cualquier dispositivo que entre con admin/admin comparte los mismos datos.
+**Respaldo y recuperación:** antes de cualquier importación o migración de datos financieros, exporta una copia del documento Firestore y de la copia local en conflicto; anota número de filas y totales por período. Recupera primero en una copia del proyecto y compara ventas, gastos, cierres, turno y secuencia de factura antes de habilitar escrituras. El código actual no migra automáticamente historiales locales al documento remoto.
 
-Sin este paso, el login funciona igual, pero cada aparato sigue guardando su copia por separado — el login por sí solo no mueve datos entre dispositivos, necesita esta base de datos detrás.
+Tras publicar una versión nueva, recarga la aplicación en todos los dispositivos. Los clientes con la versión anterior todavía pueden escribir con el protocolo antiguo y no respetan las transacciones ni la resolución de conflictos de esta versión.
 
 ## Siguientes pasos sugeridos
-- Conectar el cobro (`registerSale` en `store.js`) a tu backend/ERP real con el patrón de cola y reintentos que ya conversamos, para que no dependa de `localStorage`.
 - Reemplazar los datos de `NEGOCIO` en `store.js` (cédula, teléfono) por los reales del negocio.
 - Ajustar precios y categorías del catálogo en `store.js` según el menú final.

@@ -71,8 +71,10 @@ window.VV = (function(){
     { id: "d6", cat: "bebidas", name: "Batido de Piña(Agua)", desc: "Batidos y Bebidas", price: 1250 },
     { id: "d7", cat: "bebidas", name: "Batido de Mango(Agua)", desc: "Batidos y Bebidas", price: 1250 },
     { id: "d8", cat: "bebidas", name: "Café Frío Volcano", desc: "Batidos y Bebidas", price: 1950 },
-    { id: "d9", cat: "bebidas", name: "Bebida Gaseosa", desc: "Batidos y Bebidas", price: 0, displayPrice: "NO DISPONIBLE" },
+    { id: "d9", cat: "bebidas", name: "Bebida Gaseosa", desc: "Batidos y Bebidas", price: 1200 },
   ];
+  const SODA_PRODUCT_ID = "d9";
+  const SODA_PRICE = 1200;
 
   const CATEGORIES = [
     { id: "todos", label: "Todos" },
@@ -129,6 +131,9 @@ window.VV = (function(){
   ];
 
   const CRC = n => "\u20a1" + Math.round(n).toLocaleString("es-CR");
+  const escapeHtml = value => String(value).replace(/[&<>"']/g, char => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[char]);
 
   const pad2 = n => String(n).padStart(2, "0");
   const todayKey = () => {
@@ -162,14 +167,8 @@ window.VV = (function(){
   }
 
   function getOpenDay(){
-    const stored = readJSON("vv_openDay", null);
-    if(stored && stored.id && /^\d{4}-\d{2}-\d{2}$/.test(stored.businessDate) && stored.openedAt){
-      return stored;
-    }
-    const openDay = createOpenDay();
-    localStorage.setItem("vv_openDay", JSON.stringify(openDay));
-    scheduleCloudPush();
-    return openDay;
+    if(cloudState && cloudState.vv_openDay) return cloudState.vv_openDay;
+    return { id: "loading", businessDate: todayKey(), openedAt: 0 };
   }
 
   /* =========================================================
@@ -197,18 +196,7 @@ window.VV = (function(){
     }
   };
 
-  /* =========================================================
-     SINCRONIZACIÓN EN LA NUBE (Firebase Firestore)
-     Así los datos de la cuenta admin no dependen de una sola PC:
-     quedan guardados en internet y cualquier dispositivo con el
-     enlace + usuario/contraseña ve la misma información.
-
-     Para activarla: crea un proyecto gratis en https://console.firebase.google.com,
-     activa "Firestore Database" (modo producción o prueba) y pega aquí
-     los datos que te da la consola en "Configuración del proyecto".
-     Mientras este objeto esté vacío, la app sigue funcionando
-     normal pero guardando SOLO en este navegador (como antes).
-     ========================================================= */
+  /* Firestore es la autoridad para el estado compartido; localStorage es solo caché y cola de reintentos. */
   const FIREBASE_CONFIG = {
     apiKey: "AIzaSyBwT3IBReIkJbHZMXBE1J3hSOqGcxK8e-c",
     authDomain: "volcano-vibes.firebaseapp.com",
@@ -221,109 +209,611 @@ window.VV = (function(){
   const CLOUD_DOC_PATH = ["volcano_vibes", "admin"]; // colección / documento en Firestore
 
   let cloudDb = null;
+  let cloudRef = null;
+  let cloudStatus = "initializing";
   let cloudReady = false;
-  let cloudPushTimer = null;
+  let cloudConflict = false;
+  let cloudBackupReady = false;
+  let cloudRemoteExists = false;
+  let cloudState = null;
+  let cloudUnsubscribe = null;
+  let cloudInitPromise = null;
+  let cloudError = null;
+  const pendingOperationIds = new Map();
+  const CLOUD_FIELDS = [
+    "vv_day_sales", "vv_archive", "vv_expense_day", "vv_expense_archive",
+    "vv_openDay", "vv_closures", "vv_invoice_seq"
+  ];
+  const CLOUD_CACHE_MARKER = "vv_cloud_cache_signature";
+  const PENDING_OPERATIONS_KEY = "vv_pending_operations";
+  const CONFLICT_BACKUP_KEY = "vv_sync_conflict_backup";
 
   function isCloudConfigured(){ return !!FIREBASE_CONFIG.apiKey; }
+  function cloudSnapshot(){ return cloudState; }
+  function isCloudReady(){ return cloudReady && !cloudConflict; }
+  function getCloudStatus(){ return { status: cloudStatus, error: cloudError, conflict: cloudConflict }; }
 
-  function initCloud(){
-    if(!isCloudConfigured() || cloudReady) return;
-    if(typeof firebase === "undefined"){ return; } // SDK no cargado en esta página
+  function emitCloudStatus(status, error){
+    cloudStatus = status;
+    cloudError = error || null;
+    const statusElement = document.getElementById("cloudStatusText");
+    const retryButton = document.getElementById("retryCloud");
+    const statusMessages = {
+      initializing: "Conectando con Firestore…",
+      loaded: "Datos sincronizados con Firestore.",
+      empty: "Firestore estaba vacío; se inicializó un turno compartido.",
+      conflict: "Conflicto de datos locales. No se sobrescribió la copia local y las escrituras están pausadas.",
+      "connection-error": "Sin conexión con Firestore. Los cobros y cambios están pausados.",
+      "permission-error": "Firestore denegó el acceso. Revisa los permisos de la cuenta.",
+      "read-error": "No se pudieron leer los datos de Firestore.",
+      "write-error": "No se pudo confirmar el cambio en Firestore. El carrito se conserva para reintentar."
+    };
+    const pendingCount = readPendingOperations().length;
+    if(statusElement){
+      statusElement.textContent = statusMessages[status] || "Estado de Firestore desconocido.";
+      if(pendingCount) statusElement.textContent += " Hay " + pendingCount + " operación(es) local(es) pendientes.";
+      statusElement.parentElement.hidden = false;
+      statusElement.parentElement.dataset.state = status;
+      if(error) statusElement.title = error.message || String(error);
+    }
+    if(retryButton){
+      retryButton.hidden = !["connection-error", "permission-error", "read-error", "write-error"].includes(status);
+      if(!retryButton.dataset.bound){
+        retryButton.addEventListener("click", () => retryCloud());
+        retryButton.dataset.bound = "true";
+      }
+    }
+    const pendingButton = document.getElementById("retryPending");
+    if(pendingButton){
+      pendingButton.hidden = !pendingCount || !cloudReady || cloudConflict;
+      if(!pendingButton.dataset.bound){
+        pendingButton.addEventListener("click", () => retryPendingOperations().catch(err => {
+          console.error("No se pudieron reintentar las operaciones pendientes:", err);
+        }));
+        pendingButton.dataset.bound = "true";
+      }
+    }
+    const resolveButton = document.getElementById("useRemoteData");
+    if(resolveButton){
+      resolveButton.hidden = status !== "conflict" || !cloudRemoteExists;
+      if(!resolveButton.dataset.bound){
+        resolveButton.addEventListener("click", () => {
+          if(!window.confirm("Se conservará una copia local del conflicto, pero los datos mostrados y las próximas escrituras usarán Firestore. ¿Continuar?")) return;
+          try{ resolveCloudConflict(); }
+          catch(err){ window.alert(err.message); }
+        });
+        resolveButton.dataset.bound = "true";
+      }
+    }
+    window.dispatchEvent(new CustomEvent("vv:cloud-status", { detail: getCloudStatus() }));
+  }
+
+  function parseCloudField(value, fallback){
+    if(value === undefined || value === null) return fallback;
+    if(typeof value !== "string") return value;
+    try{ return JSON.parse(value); }
+    catch(err){ throw new Error("El documento de Firestore contiene JSON inválido."); }
+  }
+
+  function normalizedState(data){
+    const raw = data || {};
+    const parsed = {};
+    CLOUD_FIELDS.forEach(key => {
+      const fallback = key === "vv_invoice_seq" ? 0
+        : key === "vv_openDay" ? null
+        : key === "vv_day_sales" ? { date: "", dayId: "", items: [] }
+        : key === "vv_expense_day" ? { date: "", dayId: "", items: [] }
+        : [];
+      parsed[key] = parseCloudField(raw[key], fallback);
+    });
+    parsed.vv_products = parseCloudField(raw.vv_products, PRODUCTS);
+    parsed.vv_supplies = parseCloudField(raw.vv_supplies, SUPPLIES);
+    parsed.updatedAt = raw.updatedAt || 0;
+    return parsed;
+  }
+
+  function cloudStateValidationError(state){
+    const recordArrays = ["vv_archive", "vv_expense_archive", "vv_closures"];
+    if(recordArrays.some(key => !Array.isArray(state[key]))) return new Error("Firestore contiene una lista de datos con formato inválido.");
+    if(!state.vv_day_sales || !Array.isArray(state.vv_day_sales.items)
+      || !state.vv_expense_day || !Array.isArray(state.vv_expense_day.items)){
+      return new Error("Firestore contiene un registro diario con formato inválido.");
+    }
+    const allRecords = [
+      ...state.vv_archive, ...state.vv_expense_archive, ...state.vv_closures,
+      ...state.vv_day_sales.items, ...state.vv_expense_day.items
+    ];
+    if(allRecords.some(item => !item || typeof item !== "object" || Array.isArray(item))){
+      return new Error("Firestore contiene un registro individual con formato inválido.");
+    }
+    if(!state.vv_openDay || !state.vv_openDay.id
+      || !/^\d{4}-\d{2}-\d{2}$/.test(state.vv_openDay.businessDate)
+      || !Number(state.vv_openDay.openedAt)){
+      return new Error("El documento remoto no contiene un turno abierto válido.");
+    }
+    if(!Array.isArray(state.vv_products) || state.vv_products.some(item =>
+      !item || typeof item.id !== "string" || typeof item.name !== "string"
+      || !Number.isFinite(Number(item.price)))){
+      return new Error("Firestore contiene un catálogo de productos inválido.");
+    }
+    if(!Array.isArray(state.vv_supplies) || state.vv_supplies.some(item =>
+      !item || typeof item.id !== "string" || typeof item.name !== "string")){
+      return new Error("Firestore contiene una lista de insumos inválida.");
+    }
+    if(!Number.isFinite(Number(state.vv_invoice_seq)) || Number(state.vv_invoice_seq) < 0){
+      return new Error("Firestore contiene una secuencia de facturas inválida.");
+    }
+    return null;
+  }
+
+  function encodeCloudState(state){
+    const encoded = {};
+    CLOUD_FIELDS.forEach(key => {
+      encoded[key] = typeof state[key] === "string" ? state[key] : JSON.stringify(state[key]);
+    });
+    encoded.vv_products = JSON.stringify(state.vv_products);
+    encoded.vv_supplies = JSON.stringify(state.vv_supplies);
+    encoded.updatedAt = Date.now();
+    return encoded;
+  }
+
+  function cloudPatch(state, previous){
+    const encoded = {};
+    CLOUD_FIELDS.forEach(key => {
+      if(JSON.stringify(state[key]) !== JSON.stringify(previous[key])){
+        encoded[key] = key === "vv_invoice_seq" ? state[key] : JSON.stringify(state[key]);
+      }
+    });
+    ["vv_products", "vv_supplies"].forEach(key => {
+      if(JSON.stringify(state[key]) !== JSON.stringify(previous[key])){
+        encoded[key] = JSON.stringify(state[key]);
+      }
+    });
+    if(Object.keys(encoded).length) encoded.updatedAt = Date.now();
+    return encoded;
+  }
+
+  function persistentLocalState(){
+    const state = {};
+    CLOUD_FIELDS.forEach(key => {
+      const storageKey = key === "vv_invoice_seq" ? "vv_invoice_seq_" + businessYear() : key;
+      let value = null;
+      try{ value = localStorage.getItem(storageKey); }catch(err){ /* local cache is optional */ }
+      if(key === "vv_invoice_seq") state[key] = value === null ? 0 : parseInt(value, 10) || 0;
+      else if(value === null){
+        state[key] = key === "vv_openDay" ? null
+          : key === "vv_day_sales" ? { date: "", dayId: "", items: [] }
+          : key === "vv_expense_day" ? { date: "", dayId: "", items: [] } : [];
+      }else{
+        try{ state[key] = JSON.parse(value); }
+        catch(err){ state[key] = { invalidLocalData: value }; }
+      }
+    });
+    return state;
+  }
+
+  function stateSignature(state){
+    return JSON.stringify(CLOUD_FIELDS.reduce((result, key) => {
+      result[key] = state[key];
+      return result;
+    }, {}));
+  }
+
+  function hasLocalBusinessData(state){
+    if(CLOUD_FIELDS.some(key => state[key] && state[key].invalidLocalData)) return true;
+    return ["vv_day_sales", "vv_archive", "vv_expense_day", "vv_expense_archive", "vv_closures"]
+      .some(key => {
+        const value = state[key];
+        const records = Array.isArray(value) ? value : value && value.items;
+        return Array.isArray(records) && records.length > 0;
+      }) || Number(state.vv_invoice_seq) > 0
+      || !!(state.vv_openDay && state.vv_openDay.id && state.vv_openDay.openedAt);
+  }
+
+  function preserveLocalConflict(state){
     try{
-      firebase.initializeApp(FIREBASE_CONFIG);
-      cloudDb = firebase.firestore();
-      cloudReady = true;
-      const ref = cloudDb.collection(CLOUD_DOC_PATH[0]).doc(CLOUD_DOC_PATH[1]);
-      ref.onSnapshot(snap => {
-        if(!snap.exists) return;
-        const remote = snap.data();
-        const localUpdatedAt = parseInt(localStorage.getItem("vv_updated_at") || "0", 10);
-        // Solo aplica lo remoto si es más nuevo que lo que ya tenemos aquí,
-        // para no pisar cambios locales recién hechos en este mismo dispositivo.
-        if(remote.updatedAt && remote.updatedAt > localUpdatedAt){
-          applyCloudState(remote);
-          window.dispatchEvent(new CustomEvent("vv:cloud-sync"));
-        }
-      });
+      const existing = JSON.parse(localStorage.getItem(CONFLICT_BACKUP_KEY) || "[]");
+      const backups = Array.isArray(existing) ? existing : [existing];
+      const signature = stateSignature(state);
+      if(!backups.some(item => item.signature === signature)){
+        backups.push({ capturedAt: new Date().toISOString(), signature, data: state });
+        localStorage.setItem(CONFLICT_BACKUP_KEY, JSON.stringify(backups));
+      }
+      return true;
     }catch(err){
-      console.warn("No se pudo conectar con la nube:", err);
+      console.warn("No se pudo guardar la copia local en conflicto:", err);
+      return false;
     }
   }
 
-  function localState(){
+  function resolveCloudConflict(){
+    if(!cloudConflict || !cloudState) throw new Error("No hay un conflicto local pendiente.");
+    if(!cloudBackupReady) throw new Error("No se pudo confirmar que la copia local esté respaldada; no se resolvió el conflicto.");
+    if(!cloudRemoteExists) throw new Error("Firestore no tiene una copia remota que pueda elegirse. Se requiere revisar y autorizar una recuperación local.");
+    cloudConflict = false;
+    cloudReady = true;
+    cacheRemoteState(cloudState);
+    emitCloudStatus("loaded");
+    window.dispatchEvent(new CustomEvent("vv:cloud-sync"));
+  }
+
+  function cacheRemoteState(state){
+    CLOUD_FIELDS.forEach(key => {
+      const storageKey = key === "vv_invoice_seq" ? "vv_invoice_seq_" + businessYear() : key;
+      try{ localStorage.setItem(storageKey, JSON.stringify(state[key])); }
+      catch(err){ console.warn("No se pudo actualizar la caché local:", storageKey, err); }
+    });
+    try{ localStorage.setItem("vv_products", JSON.stringify(state.vv_products)); }catch(err){ /* optional cache */ }
+    try{ localStorage.setItem("vv_supplies", JSON.stringify(state.vv_supplies)); }catch(err){ /* optional cache */ }
+    try{ localStorage.setItem("vv_openDay", JSON.stringify(state.vv_openDay)); }catch(err){ /* optional cache */ }
+    try{ localStorage.setItem(CLOUD_CACHE_MARKER, stateSignature(state)); }catch(err){ /* optional cache */ }
+  }
+
+  function installRemoteState(state, initial){
+    const validationError = cloudStateValidationError(state);
+    if(validationError){
+      emitCloudStatus("read-error", validationError);
+      cloudReady = false;
+      return false;
+    }
+    const local = persistentLocalState();
+    let previousSignature = null;
+    try{ previousSignature = localStorage.getItem(CLOUD_CACHE_MARKER); }catch(err){ /* optional cache */ }
+    const localChangedSinceCache = hasLocalBusinessData(local)
+      && previousSignature && previousSignature !== stateSignature(local);
+    const untrackedLocalConflict = !previousSignature && hasLocalBusinessData(local)
+      && stateSignature(local) !== stateSignature(state);
+    if(initial && (localChangedSinceCache || untrackedLocalConflict)){
+      cloudConflict = true;
+      cloudReady = false;
+      cloudBackupReady = preserveLocalConflict(local);
+      cloudState = state;
+      cloudRemoteExists = true;
+      emitCloudStatus("conflict", new Error("Hay datos locales que no coinciden con Firestore. Se conservaron sin sobrescribirlos; las escrituras están pausadas."));
+      window.dispatchEvent(new CustomEvent("vv:cloud-sync"));
+      return false;
+    }
+    cloudState = state;
+    cloudReady = true;
+    cacheRemoteState(state);
+    emitCloudStatus("loaded");
+    window.dispatchEvent(new CustomEvent("vv:cloud-sync"));
+    return true;
+  }
+
+  function emptyCloudState(){
+    const openDay = createOpenDay();
     return {
-      vv_day_sales: localStorage.getItem("vv_day_sales"),
-      vv_archive: localStorage.getItem("vv_archive"),
-      vv_expense_day: localStorage.getItem("vv_expense_day"),
-      vv_expense_archive: localStorage.getItem("vv_expense_archive"),
-      vv_openDay: localStorage.getItem("vv_openDay"),
-      vv_closures: localStorage.getItem("vv_closures"),
-      vv_invoice_seq: localStorage.getItem("vv_invoice_seq_" + businessYear())
+      vv_day_sales: { date: openDay.businessDate, dayId: openDay.id, items: [] },
+      vv_archive: [],
+      vv_expense_day: { date: openDay.businessDate, dayId: openDay.id, items: [] },
+      vv_expense_archive: [],
+      vv_openDay: openDay,
+      vv_closures: [],
+      vv_invoice_seq: 0,
+      vv_products: PRODUCTS,
+      vv_supplies: SUPPLIES,
+      updatedAt: 0
     };
   }
 
-  function applyCloudState(remote){
-    ["vv_day_sales","vv_archive","vv_expense_day","vv_expense_archive","vv_openDay","vv_closures"].forEach(k => {
-      if(remote[k] !== undefined && remote[k] !== null) localStorage.setItem(k, remote[k]);
+  function classifyCloudError(err, operation){
+    const code = String(err && err.code || "").toLowerCase();
+    if(code.includes("permission-denied") || code.includes("unauthenticated")) return "permission-error";
+    if(code.includes("unavailable") || code.includes("deadline-exceeded") || code.includes("network")) return "connection-error";
+    return operation === "read" ? "read-error" : "write-error";
+  }
+
+  function initCloud(){
+    if(cloudInitPromise) return cloudInitPromise;
+    cloudReady = false;
+    cloudConflict = false;
+    cloudBackupReady = false;
+    cloudRemoteExists = false;
+    emitCloudStatus("initializing");
+    if(!isCloudConfigured()){
+      emitCloudStatus("read-error", new Error("Firebase no está configurado."));
+      return Promise.resolve(false);
+    }
+    if(typeof firebase === "undefined"){
+      emitCloudStatus("connection-error", new Error("No se pudo cargar el SDK de Firebase."));
+      return Promise.resolve(false);
+    }
+    cloudInitPromise = (async () => {
+      let initializationOperation = "read";
+      try{
+        const app = firebase.apps.find(item => item.options.projectId === FIREBASE_CONFIG.projectId)
+          || firebase.initializeApp(FIREBASE_CONFIG);
+        cloudDb = app.firestore();
+        cloudRef = cloudDb.collection(CLOUD_DOC_PATH[0]).doc(CLOUD_DOC_PATH[1]);
+        let initialSnapshot;
+        try{
+          initialSnapshot = await cloudRef.get({ source: "server" });
+        }catch(err){
+          emitCloudStatus(classifyCloudError(err, "read"), err);
+          return false;
+        }
+        if(!initialSnapshot.exists || Object.keys(initialSnapshot.data() || {}).length === 0){
+          cloudRemoteExists = initialSnapshot.exists;
+          const local = persistentLocalState();
+          if(hasLocalBusinessData(local)){
+            cloudConflict = true;
+            cloudState = emptyCloudState();
+            cloudBackupReady = preserveLocalConflict(local);
+            emitCloudStatus("conflict", new Error("Firestore no contiene el documento, pero este dispositivo conserva registros locales. No se subió ni eliminó ningún dato."));
+          }else{
+            const initialState = emptyCloudState();
+            initializationOperation = "write";
+            await cloudDb.runTransaction(async transaction => {
+              const current = await transaction.get(cloudRef);
+              if(current.exists){
+                if(Object.keys(current.data() || {}).length !== 0) return;
+                transaction.update(cloudRef, encodeCloudState(initialState));
+              }else{
+                transaction.set(cloudRef, encodeCloudState(initialState));
+              }
+            });
+            initializationOperation = "read";
+            const verified = await cloudRef.get({ source: "server" });
+            if(!verified.exists) throw new Error("El documento inicial no apareció después de guardarlo.");
+            installRemoteState(normalizedState(verified.data()), true);
+            if(cloudReady) emitCloudStatus("empty");
+          }
+        }else{
+          const remote = normalizedState(initialSnapshot.data());
+          const valid = installRemoteState(remote, true);
+          if(valid){
+            const additive = {};
+            if(initialSnapshot.data().vv_products === undefined) additive.vv_products = JSON.stringify(PRODUCTS);
+            if(initialSnapshot.data().vv_supplies === undefined) additive.vv_supplies = JSON.stringify(SUPPLIES);
+            if(Object.keys(additive).length){
+              initializationOperation = "write";
+              await cloudDb.runTransaction(async transaction => {
+                const current = await transaction.get(cloudRef);
+                if(!current.exists) throw new Error("El documento desapareció durante la inicialización.");
+                const patch = {};
+                if(current.data().vv_products === undefined) patch.vv_products = additive.vv_products;
+                if(current.data().vv_supplies === undefined) patch.vv_supplies = additive.vv_supplies;
+                if(Object.keys(patch).length) transaction.update(cloudRef, patch);
+              });
+              initializationOperation = "read";
+            }
+          }
+        }
+        if(cloudUnsubscribe) cloudUnsubscribe();
+        cloudUnsubscribe = cloudRef.onSnapshot({ includeMetadataChanges: true }, snapshot => {
+          if(snapshot.metadata && snapshot.metadata.fromCache) return;
+          if(!snapshot.exists){
+            cloudRemoteExists = false;
+            if(cloudConflict){
+              emitCloudStatus("conflict", new Error("Firestore no contiene el documento y este dispositivo conserva datos locales."));
+              return;
+            }
+            cloudReady = false;
+            emitCloudStatus("read-error", new Error("El documento de Firestore fue eliminado mientras la aplicación estaba abierta."));
+            return;
+          }
+          try{
+            const next = normalizedState(snapshot.data());
+            cloudRemoteExists = true;
+            const validationError = cloudStateValidationError(next);
+            if(validationError) throw validationError;
+            cloudState = next;
+            let cachedSignature = null;
+            try{ cachedSignature = localStorage.getItem(CLOUD_CACHE_MARKER); }catch(err){ /* optional cache */ }
+            const local = persistentLocalState();
+            if(!cloudConflict && hasLocalBusinessData(local) && cachedSignature
+              && cachedSignature !== stateSignature(local)){
+              cloudConflict = true;
+              cloudReady = false;
+              cloudBackupReady = preserveLocalConflict(local);
+              emitCloudStatus("conflict", new Error("La caché local cambió fuera de la sincronización. Se guardó una copia y las escrituras están pausadas."));
+              window.dispatchEvent(new CustomEvent("vv:cloud-sync"));
+              return;
+            }
+            if(!cloudConflict){
+              cloudReady = true;
+              cacheRemoteState(next);
+              emitCloudStatus("loaded");
+            }
+            window.dispatchEvent(new CustomEvent("vv:cloud-sync"));
+          }catch(err){
+            cloudReady = false;
+            emitCloudStatus("read-error", err);
+          }
+        }, err => {
+          cloudReady = false;
+          emitCloudStatus(classifyCloudError(err, initializationOperation), err);
+        });
+        return cloudReady;
+      }catch(err){
+        cloudReady = false;
+        emitCloudStatus(classifyCloudError(err, initializationOperation), err);
+        console.error("Error al inicializar Firestore:", err);
+        return false;
+      }
+    })();
+    return cloudInitPromise;
+  }
+
+  function disposeCloud(){
+    if(cloudUnsubscribe){
+      cloudUnsubscribe();
+      cloudUnsubscribe = null;
+    }
+    cloudInitPromise = null;
+    cloudReady = false;
+  }
+
+  function retryCloud(){
+    disposeCloud();
+    cloudConflict = false;
+    return initCloud();
+  }
+
+  function requireCloudReady(){
+    if(cloudConflict) throw new Error("Hay un conflicto local pendiente de resolución. No se realizó la operación.");
+    if(!cloudReady || !cloudRef) throw new Error("Firestore aún no está listo. No se realizó la operación.");
+  }
+
+  function persistPendingOperation(type, payload){
+    const fingerprint = JSON.stringify(payload);
+    const key = type + ":" + fingerprint;
+    if(pendingOperationIds.has(key)) return pendingOperationIds.get(key);
+    try{
+      const queue = readPendingOperations();
+      const pending = queue.find(item => item.type === type && item.fingerprint === fingerprint);
+      if(pending) return pending.id;
+      const id = newId();
+      pendingOperationIds.set(key, id);
+      queue.push({ id, type, fingerprint, payload, createdAt: new Date().toISOString() });
+      localStorage.setItem(PENDING_OPERATIONS_KEY, JSON.stringify(queue));
+      return id;
+    }catch(err){
+      if(!pendingOperationIds.has(key)) pendingOperationIds.set(key, newId());
+      return pendingOperationIds.get(key);
+    }
+  }
+
+  function readPendingOperations(){
+    try{
+      const queue = JSON.parse(localStorage.getItem(PENDING_OPERATIONS_KEY) || "[]");
+      return Array.isArray(queue) ? queue : [];
+    }catch(err){
+      console.warn("No se pudo leer la cola local de operaciones pendientes:", err);
+      return [];
+    }
+  }
+
+  async function retryPendingOperations(){
+    requireCloudReady();
+    const pending = readPendingOperations();
+    if(!pending.length) return;
+    if(!window.confirm("Se intentará confirmar " + pending.length + " operación(es) usando sus identificadores idempotentes. ¿Continuar?")) return;
+    for(const operation of pending){
+      if(operation.type === "sale"){
+        await registerSale(operation.payload.lines, operation.payload.paymentMethod, operation.id, operation.payload.dayId);
+      }else if(operation.type === "expense"){
+        await registerExpense(operation.payload.lines, operation.id, operation.payload.dayId);
+      }
+    }
+    emitCloudStatus("loaded");
+  }
+
+  function clearPendingOperation(type, payload){
+    const fingerprint = JSON.stringify(payload);
+    pendingOperationIds.delete(type + ":" + fingerprint);
+    try{
+      const queue = JSON.parse(localStorage.getItem(PENDING_OPERATIONS_KEY) || "[]");
+      localStorage.setItem(PENDING_OPERATIONS_KEY, JSON.stringify(
+        queue.filter(item => !(item.type === type && item.fingerprint === fingerprint))
+      ));
+    }catch(err){
+      console.warn("No se pudo limpiar la cola local de operaciones confirmadas:", err);
+    }
+  }
+
+  async function transactCloud(mutator){
+    requireCloudReady();
+    try{
+      const result = await cloudDb.runTransaction(async transaction => {
+        const snapshot = await transaction.get(cloudRef);
+        if(!snapshot.exists) throw new Error("El documento remoto no existe; se detuvo la escritura para evitar recrearlo con datos incompletos.");
+        const latest = normalizedState(snapshot.data());
+        const validationError = cloudStateValidationError(latest);
+        if(validationError) throw validationError;
+        const { state, result: operationResult, changed } = mutator(latest);
+        if(changed){
+          const patch = cloudPatch(state, latest);
+          if(!Object.keys(patch).length) return { state: latest, result: operationResult };
+          transaction.update(cloudRef, patch);
+        }
+        return { state: changed ? state : latest, result: operationResult };
+      });
+      cloudState = result.state;
+      cacheRemoteState(result.state);
+      window.dispatchEvent(new CustomEvent("vv:cloud-sync"));
+      return result.result;
+    }catch(err){
+      emitCloudStatus(classifyCloudError(err, "write"), err);
+      console.error("No se pudo completar la operación en Firestore:", err);
+      throw err;
+    }
+  }
+
+  function mergeRecords(existing, incoming){
+    const result = Array.isArray(existing) ? [...existing] : [];
+    const positions = new Map();
+    const legacyCounts = new Map();
+    result.forEach((item, index) => {
+      if(item && item.id) positions.set(item.id, index);
+      else{
+        const key = JSON.stringify(item);
+        legacyCounts.set(key, (legacyCounts.get(key) || 0) + 1);
+      }
     });
-    if(remote.vv_invoice_seq !== undefined && remote.vv_invoice_seq !== null){
-      localStorage.setItem("vv_invoice_seq_" + businessYear(), remote.vv_invoice_seq);
-    }
-    localStorage.setItem("vv_updated_at", String(remote.updatedAt || Date.now()));
-    if(hasUnmigratedRecords()){
-      localStorage.removeItem("vv_day_migration_v1");
-      migrateRecords();
-    }
-  }
-
-  function hasUnmigratedRecords(){
-    const storedRecords = [
-      readJSON("vv_archive", []),
-      readJSON("vv_expense_archive", []),
-      (readJSON("vv_day_sales", {}) || {}).items || [],
-      (readJSON("vv_expense_day", {}) || {}).items || []
-    ];
-    return storedRecords.some(records => Array.isArray(records)
-      && records.some(item => !item || !item.dayId || !item.businessDate));
-  }
-
-  // Agrupa varias escrituras seguidas (ej. varias líneas de un carrito) en un solo envío a la nube.
-  function scheduleCloudPush(){
-    const now = Date.now();
-    localStorage.setItem("vv_updated_at", String(now));
-    if(!isCloudConfigured() || !cloudReady) return;
-    clearTimeout(cloudPushTimer);
-    cloudPushTimer = setTimeout(() => {
-      const ref = cloudDb.collection(CLOUD_DOC_PATH[0]).doc(CLOUD_DOC_PATH[1]);
-      const state = localState();
-      state.updatedAt = now;
-      ref.set(state, { merge: true }).catch(err => console.warn("No se pudo guardar en la nube:", err));
-    }, 400);
+    const seenLegacy = new Map();
+    (Array.isArray(incoming) ? incoming : []).forEach(item => {
+      if(item && item.id){
+        if(positions.has(item.id)){
+          const index = positions.get(item.id);
+          result[index] = { ...result[index], ...item };
+        }
+        else{
+          positions.set(item.id, result.length);
+          result.push(item);
+        }
+        return;
+      }
+      const key = JSON.stringify(item);
+      const seen = (seenLegacy.get(key) || 0) + 1;
+      seenLegacy.set(key, seen);
+      if(seen > (legacyCounts.get(key) || 0)) result.push(item);
+    });
+    return result;
   }
 
   /* ---------- Ventas del día / archivo mensual ---------- */
   function loadDay(){
     const openDay = getOpenDay();
-    const stored = readJSON("vv_day_sales", null) || {};
+    const stored = cloudState && cloudState.vv_day_sales || { items: [] };
     const items = Array.isArray(stored.items) ? stored.items : [];
     return { date: openDay.businessDate, dayId: openDay.id, items: items.filter(item => item.dayId === openDay.id) };
   }
-  function saveDay(day){ localStorage.setItem("vv_day_sales", JSON.stringify(day)); scheduleCloudPush(); }
+  function saveDay(day){
+    return transactCloud(state => {
+      const current = state.vv_day_sales || { items: [] };
+      const merged = {
+        ...current,
+        ...day,
+        items: mergeRecords(current.items, day.items)
+      };
+      return { state: { ...state, vv_day_sales: merged }, result: merged, changed: true };
+    });
+  }
 
   function loadArchive(){
-    const archive = readJSON("vv_archive", []);
+    const archive = cloudState && cloudState.vv_archive;
     return Array.isArray(archive) ? archive : [];
   }
   function getOpenDaySales(){
     const dayId = getOpenDay().id;
     return loadArchive().filter(item => item.dayId === dayId).concat(loadDay().items);
   }
-  function saveArchive(arr){ localStorage.setItem("vv_archive", JSON.stringify(arr)); scheduleCloudPush(); }
+  function saveArchive(arr){
+    return transactCloud(state => {
+      const merged = mergeRecords(state.vv_archive, arr);
+      return { state: { ...state, vv_archive: merged }, result: merged, changed: true };
+    });
+  }
 
   function archiveItems(date, items){
-    const arch = loadArchive();
-    items.forEach(it => arch.push({ ...it, date: it.businessDate || date }));
-    saveArchive(arch);
+    return transactCloud(state => {
+      const archive = mergeRecords(state.vv_archive, items.map(item => ({
+        ...item, date: item.businessDate || date
+      })));
+      return { state: { ...state, vv_archive: archive }, result: archive, changed: true };
+    });
   }
 
   function getMonthRows(day){
@@ -345,58 +835,99 @@ window.VV = (function(){
   /* ---------- Numeración de factura ---------- */
   function nextInvoiceNumber(){
     const year = businessYear();
-    const key = "vv_invoice_seq_" + year;
-    let n = parseInt(localStorage.getItem(key) || "0", 10) + 1;
-    localStorage.setItem(key, String(n));
-    scheduleCloudPush();
-    return "FS/" + year + "/" + String(n).padStart(4, "0");
+    return transactCloud(state => {
+      const n = (parseInt(state.vv_invoice_seq, 10) || 0) + 1;
+      const next = { ...state, vv_invoice_seq: n };
+      return { state: next, result: "FS/" + year + "/" + String(n).padStart(4, "0"), changed: true };
+    });
   }
 
   /* ---------- Registrar una venta cobrada (líneas del carrito) ---------- */
-  function registerSale(cartLines, paymentMethod){
+  async function registerSale(cartLines, paymentMethod, existingOperationId, originalDayId){
     if(paymentMethod !== "cash" && paymentMethod !== "card"){
       throw new TypeError("El método de pago debe ser cash o card.");
     }
-    const day = loadDay();
+    requireCloudReady();
+    const lines = cartLines.map(item => ({ id: item.id, name: item.name, price: item.price, qty: item.qty }));
+    const expectedDayId = originalDayId || getOpenDay().id;
+    const payload = { lines, paymentMethod, dayId: expectedDayId };
+    const operationId = existingOperationId || persistPendingOperation("sale", payload);
     const now = new Date();
-    const openDay = getOpenDay();
     const hora = now.toLocaleTimeString("es-CR", {
       hour: "2-digit", minute: "2-digit", hourCycle: "h23"
     });
-    cartLines.forEach(item => {
-      day.items.push({
-        time: hora, ts: now.getTime(), createdAt: now.toISOString(), dayId: openDay.id,
-        businessDate: openDay.businessDate, paymentMethod,
-        product: item.name, qty: item.qty, unit: item.price, total: item.qty * item.price
+    try{
+      const invoiceNumber = await transactCloud(state => {
+        const existing = (state.vv_day_sales.items || []).find(item => item.operationId === operationId)
+          || (state.vv_archive || []).find(item => item.operationId === operationId);
+        if(existing) return { state, result: existing.invoiceNumber, changed: false };
+        if(state.vv_openDay.id !== expectedDayId){
+          throw new Error("El turno cambió en otro dispositivo. La venta no se movió a un turno distinto.");
+        }
+        const openDay = state.vv_openDay;
+        const sequence = (parseInt(state.vv_invoice_seq, 10) || 0) + 1;
+        const invoice = "FS/" + businessYear() + "/" + String(sequence).padStart(4, "0");
+        const currentDay = state.vv_day_sales && typeof state.vv_day_sales === "object"
+          ? state.vv_day_sales : { date: openDay.businessDate, dayId: openDay.id, items: [] };
+        const currentItems = Array.isArray(currentDay.items) ? [...currentDay.items] : [];
+        lines.forEach((item, index) => currentItems.push({
+          id: operationId + "-" + index, operationId, invoiceNumber: invoice,
+          time: hora, ts: now.getTime(), createdAt: now.toISOString(), dayId: openDay.id,
+          businessDate: openDay.businessDate, paymentMethod,
+          product: item.name, qty: item.qty, unit: item.price, total: item.qty * item.price
+        }));
+        const next = {
+          ...state,
+          vv_day_sales: { date: openDay.businessDate, dayId: openDay.id, items: currentItems },
+          vv_invoice_seq: sequence
+        };
+        return { state: next, result: invoice, changed: true };
       });
-    });
-    saveDay(day);
-    return day;
+      clearPendingOperation("sale", payload);
+      emitCloudStatus("loaded");
+      return invoiceNumber;
+    }catch(err){
+      throw err;
+    }
   }
 
   /* ---------- Gastos / compras de insumos (independiente de las ventas) ---------- */
   function loadExpenseDay(){
     const openDay = getOpenDay();
-    const stored = readJSON("vv_expense_day", null) || {};
+    const stored = cloudState && cloudState.vv_expense_day || {};
     const items = Array.isArray(stored.items) ? stored.items : [];
     return { date: openDay.businessDate, dayId: openDay.id, items: items.filter(item => item.dayId === openDay.id) };
   }
-  function saveExpenseDay(day){ localStorage.setItem("vv_expense_day", JSON.stringify(day)); scheduleCloudPush(); }
+  function saveExpenseDay(day){
+    return transactCloud(state => {
+      const current = state.vv_expense_day || { items: [] };
+      const merged = { ...current, ...day, items: mergeRecords(current.items, day.items) };
+      return { state: { ...state, vv_expense_day: merged }, result: merged, changed: true };
+    });
+  }
 
   function loadExpenseArchive(){
-    const archive = readJSON("vv_expense_archive", []);
+    const archive = cloudState && cloudState.vv_expense_archive;
     return Array.isArray(archive) ? archive : [];
   }
   function getOpenDayExpenses(){
     const dayId = getOpenDay().id;
     return loadExpenseArchive().filter(item => item.dayId === dayId).concat(loadExpenseDay().items);
   }
-  function saveExpenseArchive(arr){ localStorage.setItem("vv_expense_archive", JSON.stringify(arr)); scheduleCloudPush(); }
+  function saveExpenseArchive(arr){
+    return transactCloud(state => {
+      const merged = mergeRecords(state.vv_expense_archive, arr);
+      return { state: { ...state, vv_expense_archive: merged }, result: merged, changed: true };
+    });
+  }
 
   function archiveExpenseItems(date, items){
-    const arch = loadExpenseArchive();
-    items.forEach(it => arch.push({ ...it, date: it.businessDate || date }));
-    saveExpenseArchive(arch);
+    return transactCloud(state => {
+      const archive = mergeRecords(state.vv_expense_archive, items.map(item => ({
+        ...item, date: item.businessDate || date
+      })));
+      return { state: { ...state, vv_expense_archive: archive }, result: archive, changed: true };
+    });
   }
 
   function getExpenseMonthRows(day){
@@ -415,21 +946,39 @@ window.VV = (function(){
     return Array.from(map.values()).sort((a,b) => b.total - a.total);
   }
 
-  function registerExpense(lines){
-    const day = loadExpenseDay();
+  async function registerExpense(lines, existingOperationId, originalDayId){
+    requireCloudReady();
+    const normalizedLines = lines.map(item => ({ name: item.name, qty: item.qty, price: item.price }));
+    const expectedDayId = originalDayId || getOpenDay().id;
+    const payload = { lines: normalizedLines, dayId: expectedDayId };
+    const operationId = existingOperationId || persistPendingOperation("expense", payload);
     const now = new Date();
-    const openDay = getOpenDay();
     const hora = now.toLocaleTimeString("es-CR", {
       hour: "2-digit", minute: "2-digit", hourCycle: "h23"
     });
-    lines.forEach(item => {
-      day.items.push({
+    const result = await transactCloud(state => {
+      if((state.vv_expense_day.items || []).some(item => item.operationId === operationId)
+        || (state.vv_expense_archive || []).some(item => item.operationId === operationId)){
+        return { state, result: state.vv_expense_day, changed: false };
+      }
+      if(state.vv_openDay.id !== expectedDayId){
+        throw new Error("El turno cambió en otro dispositivo. El gasto no se movió a un turno distinto.");
+      }
+      const openDay = state.vv_openDay;
+      const currentDay = state.vv_expense_day && typeof state.vv_expense_day === "object"
+        ? state.vv_expense_day : { date: openDay.businessDate, dayId: openDay.id, items: [] };
+      const items = Array.isArray(currentDay.items) ? [...currentDay.items] : [];
+      normalizedLines.forEach((item, index) => items.push({
+        id: operationId + "-" + index, operationId,
         time: hora, ts: now.getTime(), dayId: openDay.id, businessDate: openDay.businessDate,
         product: item.name, qty: item.qty, unit: item.price, total: item.qty * item.price
-      });
+      }));
+      const nextDay = { date: openDay.businessDate, dayId: openDay.id, items };
+      return { state: { ...state, vv_expense_day: nextDay }, result: nextDay, changed: true };
     });
-    saveExpenseDay(day);
-    return day;
+    clearPendingOperation("expense", payload);
+    emitCloudStatus("loaded");
+    return result;
   }
 
   function localDateFromTimestamp(value){
@@ -463,49 +1012,90 @@ window.VV = (function(){
     localStorage.setItem("vv_expense_archive", JSON.stringify(expenses));
     localStorage.setItem("vv_expense_day", JSON.stringify({ date: openDay.businessDate, dayId: openDay.id, items: [] }));
     localStorage.setItem("vv_day_migration_v1", "1");
-    scheduleCloudPush();
+    return null;
   }
 
   function loadClosures(){
-    const closures = readJSON("vv_closures", []);
+    const closures = cloudState && cloudState.vv_closures;
     return Array.isArray(closures) ? closures : [];
   }
 
-  function closeOpenDay(){
-    const openDay = getOpenDay();
-    const currentSales = loadDay().items;
-    const currentExpenses = loadExpenseDay().items;
-    const sales = getOpenDaySales();
-    const expenses = getOpenDayExpenses();
-    const now = Date.now();
-    const totalSales = sales.reduce((sum, item) => sum + (Number(item.total) || 0), 0);
-    const totalExpenses = expenses.reduce((sum, item) => sum + (Number(item.total) || 0), 0);
-    const closure = {
-      dayId: openDay.id, businessDate: openDay.businessDate, openedAt: openDay.openedAt,
-      closedAt: now, totalSales, totalExpenses, net: totalSales - totalExpenses,
-      dishes: sales.reduce((sum, item) => sum + (Number(item.qty) || 0), 0)
-    };
-    archiveItems(openDay.businessDate, currentSales);
-    archiveExpenseItems(openDay.businessDate, currentExpenses);
-    saveDay({ date: openDay.businessDate, dayId: openDay.id, items: [] });
-    saveExpenseDay({ date: openDay.businessDate, dayId: openDay.id, items: [] });
-    const closures = loadClosures();
-    closures.push(closure);
-    localStorage.setItem("vv_closures", JSON.stringify(closures));
-    localStorage.setItem("vv_openDay", JSON.stringify(createOpenDay(now)));
-    scheduleCloudPush();
-    return closure;
+  async function closeOpenDay(expectedDayId){
+    requireCloudReady();
+    const dayId = expectedDayId || getOpenDay().id;
+    const closedAt = Date.now();
+    return transactCloud(state => {
+      if(state.vv_openDay.id !== dayId){
+        throw new Error("El turno cambió en otro dispositivo. Actualiza la pantalla antes de cerrar.");
+      }
+      const closures = Array.isArray(state.vv_closures) ? [...state.vv_closures] : [];
+      const alreadyClosed = closures.find(item => item.dayId === dayId);
+      if(alreadyClosed) return { state, result: alreadyClosed, changed: false };
+      const daySales = state.vv_day_sales && Array.isArray(state.vv_day_sales.items)
+        ? state.vv_day_sales.items.filter(item => item.dayId === dayId) : [];
+      const dayExpenses = state.vv_expense_day && Array.isArray(state.vv_expense_day.items)
+        ? state.vv_expense_day.items.filter(item => item.dayId === dayId) : [];
+      const sales = (state.vv_archive || []).filter(item => item.dayId === dayId).concat(daySales);
+      const expenses = (state.vv_expense_archive || []).filter(item => item.dayId === dayId).concat(dayExpenses);
+      const totalSales = sales.reduce((sum, item) => sum + (Number(item.total) || 0), 0);
+      const totalExpenses = expenses.reduce((sum, item) => sum + (Number(item.total) || 0), 0);
+      const closure = {
+        dayId, businessDate: state.vv_openDay.businessDate, openedAt: state.vv_openDay.openedAt,
+        closedAt, totalSales, totalExpenses, net: totalSales - totalExpenses,
+        dishes: sales.reduce((sum, item) => sum + (Number(item.qty) || 0), 0)
+      };
+      const archiveIds = new Set((state.vv_archive || []).map(item => item.id).filter(Boolean));
+      const expenseArchiveIds = new Set((state.vv_expense_archive || []).map(item => item.id).filter(Boolean));
+      const archivedSales = [...(state.vv_archive || [])];
+      daySales.forEach(item => {
+        if(!item.id || !archiveIds.has(item.id)){
+          archivedSales.push({ ...item, date: item.businessDate || state.vv_openDay.businessDate });
+          if(item.id) archiveIds.add(item.id);
+        }
+      });
+      const archivedExpenses = [...(state.vv_expense_archive || [])];
+      dayExpenses.forEach(item => {
+        if(!item.id || !expenseArchiveIds.has(item.id)){
+          archivedExpenses.push({ ...item, date: item.businessDate || state.vv_openDay.businessDate });
+          if(item.id) expenseArchiveIds.add(item.id);
+        }
+      });
+      const nextOpenDay = createOpenDay(closedAt);
+      closures.push(closure);
+      const next = {
+        ...state,
+        vv_archive: archivedSales,
+        vv_expense_archive: archivedExpenses,
+        vv_day_sales: {
+          date: state.vv_openDay.businessDate, dayId,
+          items: (state.vv_day_sales.items || []).filter(item => item.dayId !== dayId)
+        },
+        vv_expense_day: {
+          date: state.vv_openDay.businessDate, dayId,
+          items: (state.vv_expense_day.items || []).filter(item => item.dayId !== dayId)
+        },
+        vv_closures: closures,
+        vv_openDay: nextOpenDay
+      };
+      return { state: next, result: closure, changed: true };
+    });
   }
 
-  migrateRecords();
-
   return {
-    NEGOCIO, PRODUCTS, CATEGORIES, SUPPLIES, CRC,
+    NEGOCIO, PRODUCTS, CATEGORIES, SUPPLIES, CRC, escapeHtml,
+    getProducts(){
+      if(!cloudRemoteExists || !cloudState || !Array.isArray(cloudState.vv_products)) return [];
+      return cloudState.vv_products.map(product => product.id === SODA_PRODUCT_ID
+        ? { ...product, price: SODA_PRICE, displayPrice: CRC(SODA_PRICE) }
+        : product);
+    },
+    getSupplies(){ return cloudRemoteExists && cloudState && Array.isArray(cloudState.vv_supplies) ? cloudState.vv_supplies : []; },
     todayKey, monthKey, getOpenDay,
     loadDay, saveDay, loadArchive, saveArchive, archiveItems, getMonthRows, getOpenDaySales,
     nextInvoiceNumber, registerSale,
     loadExpenseDay, saveExpenseDay, loadExpenseArchive, saveExpenseArchive,
     archiveExpenseItems, getExpenseMonthRows, registerExpense, getOpenDayExpenses, loadClosures, closeOpenDay,
-    AUTH, initCloud, isCloudConfigured
+    AUTH, initCloud, disposeCloud, retryCloud, resolveCloudConflict, retryPendingOperations,
+    isCloudConfigured, isCloudReady, hasCloudSnapshot(){ return cloudRemoteExists && !!cloudState; }, getCloudStatus
   };
 })();
