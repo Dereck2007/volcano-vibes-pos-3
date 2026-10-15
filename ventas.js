@@ -384,21 +384,35 @@
       doc.text(report.monthLabel, left, 27);
 
       const monthQty = monthRows.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+      const monthLastSale = new Map();
+      getMonthSales().forEach(sale => {
+        const current = monthLastSale.get(sale.product);
+        if(!current || (Number(sale.ts) || 0) >= (Number(current.ts) || 0)){
+          monthLastSale.set(sale.product, sale);
+        }
+      });
       doc.autoTable({
         startY: 32,
         margin: { left, right: left },
-        head: [["Producto", "Cant.", "Total acumulado"]],
+        head: [["Fecha", "Hora", "Producto", "Cant.", "Total acumulado"]],
         body: monthRows.length
-          ? monthRows.map(r => [r.product, String(r.qty), pdfMoney(r.total)])
-          : [[{ content: "Todavía no hay ventas acumuladas este mes.", colSpan: 3, styles: { halign: "center", textColor: [120, 120, 120] } }]],
-        foot: [["TOTAL DEL MES", String(monthQty), pdfMoney(f.ventasMes)]],
+          ? monthRows.map(r => {
+            const sale = monthLastSale.get(r.product);
+            return [sale ? (sale.businessDate || sale.date || "") : "", sale ? (sale.time || "") : "",
+              r.product, String(r.qty), pdfMoney(r.total)];
+          })
+          : [[{ content: "Todavía no hay ventas acumuladas este mes.", colSpan: 5, styles: { halign: "center", textColor: [120, 120, 120] } }]],
+        foot: [["", "", "TOTAL DEL MES", String(monthQty), pdfMoney(f.ventasMes)]],
         showFoot: "lastPage",
         theme: "striped",
         styles: { font: "helvetica", fontSize: 9, cellPadding: 2.6 },
         headStyles: { fillColor: RED, textColor: [255, 255, 255] },
         footStyles: { fillColor: DARK, textColor: [255, 255, 255], fontStyle: "bold" },
         alternateRowStyles: { fillColor: [247, 248, 250] },
-        columnStyles: { 1: { halign: "center", cellWidth: 20 }, 2: { halign: "right", cellWidth: 44 } }
+        columnStyles: {
+          0: { cellWidth: 24 }, 1: { cellWidth: 16 },
+          3: { halign: "right", cellWidth: 20 }, 4: { halign: "right", cellWidth: 44 }
+        }
       });
 
       /* --- Detalle: gastos del día --- */
