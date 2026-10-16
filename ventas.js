@@ -243,6 +243,11 @@
       const f = getFinancials();
       const report = getReportContext();
       const salesToday = [...getTodaySales()].sort((a, b) => (a.ts || 0) - (b.ts || 0));
+      const salesMonth = getMonthSales().sort((a, b) => {
+        const dateOrder = String(a.businessDate || "").localeCompare(String(b.businessDate || ""));
+        return dateOrder || String(a.time || "").localeCompare(String(b.time || ""), "es", { numeric: true })
+          || (Number(a.ts) || 0) - (Number(b.ts) || 0);
+      });
       const monthRows = getMonthRows(loadDay());
       const expensesToday = getTodayExpenses();
       const expensesMonth = getMonthExpenses();
@@ -355,7 +360,16 @@
       doc.text(`Fecha de negocio: ${report.date}`, left, 27);
 
       const turnQty = salesToday.reduce((s, i) => s + (Number(i.qty) || 0), 0);
+      const salesTableStyle = {
+        theme: "striped",
+        styles: { font: "helvetica", fontSize: 9, cellPadding: 2.6 },
+        headStyles: { fillColor: RED, textColor: [255, 255, 255] },
+        footStyles: { fillColor: DARK, textColor: [255, 255, 255], fontStyle: "bold" },
+        alternateRowStyles: { fillColor: [247, 248, 250] },
+        columnStyles: { 0: { cellWidth: 20 }, 2: { halign: "center", cellWidth: 16 }, 3: { cellWidth: 28 }, 4: { halign: "right", cellWidth: 34 } }
+      };
       doc.autoTable({
+        ...salesTableStyle,
         startY: 32,
         margin: { left, right: left },
         head: [["Hora", "Producto", "Cant.", "Método", "Total"]],
@@ -363,13 +377,7 @@
           ? salesToday.map(s => [s.time || "", s.product, String(s.qty), paymentLabel(s), pdfMoney(s.total)])
           : [[{ content: "Sin ventas registradas en el turno actual.", colSpan: 5, styles: { halign: "center", textColor: [120, 120, 120] } }]],
         foot: [["", "TOTAL DEL TURNO", String(turnQty), "", pdfMoney(f.ventasHoy)]],
-        showFoot: "lastPage",
-        theme: "striped",
-        styles: { font: "helvetica", fontSize: 9, cellPadding: 2.6 },
-        headStyles: { fillColor: RED, textColor: [255, 255, 255] },
-        footStyles: { fillColor: DARK, textColor: [255, 255, 255], fontStyle: "bold" },
-        alternateRowStyles: { fillColor: [247, 248, 250] },
-        columnStyles: { 0: { cellWidth: 20 }, 2: { halign: "center", cellWidth: 16 }, 3: { cellWidth: 28 }, 4: { halign: "right", cellWidth: 34 } }
+        showFoot: "lastPage"
       });
 
       /* --- Detalle: acumulado del mes por producto --- */
@@ -384,35 +392,121 @@
       doc.text(report.monthLabel, left, 27);
 
       const monthQty = monthRows.reduce((s, r) => s + (Number(r.qty) || 0), 0);
-      const monthLastSale = new Map();
-      getMonthSales().forEach(sale => {
-        const current = monthLastSale.get(sale.product);
-        if(!current || (Number(sale.ts) || 0) >= (Number(current.ts) || 0)){
-          monthLastSale.set(sale.product, sale);
-        }
-      });
       doc.autoTable({
         startY: 32,
         margin: { left, right: left },
-        head: [["Fecha", "Hora", "Producto", "Cant.", "Total acumulado"]],
+        head: [["Producto", "Cant.", "Total acumulado"]],
         body: monthRows.length
-          ? monthRows.map(r => {
-            const sale = monthLastSale.get(r.product);
-            return [sale ? (sale.businessDate || sale.date || "") : "", sale ? (sale.time || "") : "",
-              r.product, String(r.qty), pdfMoney(r.total)];
-          })
-          : [[{ content: "Todavía no hay ventas acumuladas este mes.", colSpan: 5, styles: { halign: "center", textColor: [120, 120, 120] } }]],
-        foot: [["", "", "TOTAL DEL MES", String(monthQty), pdfMoney(f.ventasMes)]],
+          ? monthRows.map(r => [r.product, String(r.qty), pdfMoney(r.total)])
+          : [[{ content: "Todavía no hay ventas acumuladas este mes.", colSpan: 3, styles: { halign: "center", textColor: [120, 120, 120] } }]],
+        foot: [["TOTAL DEL MES", String(monthQty), pdfMoney(f.ventasMes)]],
         showFoot: "lastPage",
         theme: "striped",
         styles: { font: "helvetica", fontSize: 9, cellPadding: 2.6 },
         headStyles: { fillColor: RED, textColor: [255, 255, 255] },
         footStyles: { fillColor: DARK, textColor: [255, 255, 255], fontStyle: "bold" },
         alternateRowStyles: { fillColor: [247, 248, 250] },
-        columnStyles: {
-          0: { cellWidth: 24 }, 1: { cellWidth: 16 },
-          3: { halign: "right", cellWidth: 20 }, 4: { halign: "right", cellWidth: 44 }
-        }
+        columnStyles: { 1: { halign: "center", cellWidth: 20 }, 2: { halign: "right", cellWidth: 44 } }
+      });
+
+      /* --- Detalle: ventas del mes por día --- */
+      doc.addPage();
+      doc.setTextColor(15, 20, 24);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(15);
+      doc.text("Ventas del mes por día", left, 20);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      doc.setTextColor(90, 90, 90);
+      doc.text(report.monthLabel, left, 27);
+
+      const salesByBusinessDate = new Map();
+      salesMonth.forEach(sale => {
+        const salesForDate = salesByBusinessDate.get(sale.businessDate) || [];
+        salesForDate.push(sale);
+        salesByBusinessDate.set(sale.businessDate, salesForDate);
+      });
+
+      let dayTableY = 33;
+      const minimumDayBlockHeight = 50;
+      Array.from(salesByBusinessDate.entries())
+        .sort(([dateA], [dateB]) => dateA.localeCompare(dateB))
+        .forEach(([businessDate, salesForDate]) => {
+          if(pageHeight - dayTableY < minimumDayBlockHeight){
+            doc.addPage();
+            dayTableY = 20;
+          }
+
+          const dateLabel = new Date(businessDate + "T00:00:00")
+            .toLocaleDateString("es-CR", { day: "2-digit", month: "2-digit", year: "numeric" });
+          doc.setFont("helvetica", "bold");
+          doc.setFontSize(10);
+          doc.setTextColor(DARK[0], DARK[1], DARK[2]);
+          doc.text(`Fecha de negocio: ${dateLabel}`, left, dayTableY + 4);
+
+          const salesByTurn = new Map();
+          salesForDate.forEach(sale => {
+            const turnSales = salesByTurn.get(sale.dayId) || [];
+            turnSales.push(sale);
+            salesByTurn.set(sale.dayId, turnSales);
+          });
+          const hasMultipleTurns = salesForDate.every(sale => sale.dayId)
+            && salesByTurn.size > 1;
+          const turns = hasMultipleTurns
+            ? Array.from(salesByTurn.values()).sort((turnA, turnB) => {
+              const firstA = [...turnA].sort((a, b) =>
+                String(a.time || "").localeCompare(String(b.time || ""), "es", { numeric: true })
+                || (Number(a.ts) || 0) - (Number(b.ts) || 0))[0];
+              const firstB = [...turnB].sort((a, b) =>
+                String(a.time || "").localeCompare(String(b.time || ""), "es", { numeric: true })
+                || (Number(a.ts) || 0) - (Number(b.ts) || 0))[0];
+              return String(firstA.time || "").localeCompare(String(firstB.time || ""), "es", { numeric: true })
+                || (Number(firstA.ts) || 0) - (Number(firstB.ts) || 0);
+            })
+            : [salesForDate];
+          const dayBody = [];
+          turns.forEach((turnSales, turnIndex) => {
+            if(hasMultipleTurns){
+              dayBody.push([{
+                content: `Turno ${turnIndex + 1}`,
+                colSpan: 5,
+                styles: { fontStyle: "bold", fillColor: [236, 240, 244], textColor: DARK }
+              }]);
+            }
+            turnSales.sort((a, b) =>
+              String(a.time || "").localeCompare(String(b.time || ""), "es", { numeric: true })
+              || (Number(a.ts) || 0) - (Number(b.ts) || 0))
+              .forEach(sale => dayBody.push([
+                sale.time || "", sale.product, String(sale.qty), paymentLabel(sale), pdfMoney(sale.total)
+              ]));
+          });
+
+          doc.autoTable({
+            ...salesTableStyle,
+            startY: dayTableY + 7,
+            margin: { left, right: left },
+            head: [["Hora", "Producto", "Cant.", "Método", "Total"]],
+            body: dayBody,
+            foot: [["", "TOTAL DEL DÍA",
+              String(salesForDate.reduce((sum, sale) => sum + (Number(sale.qty) || 0), 0)),
+              "", pdfMoney(sumTotal(salesForDate))]],
+            showFoot: "lastPage"
+          });
+          dayTableY = doc.lastAutoTable.finalY + 8;
+        });
+
+      const monthSalesQty = salesMonth.reduce((sum, sale) => sum + (Number(sale.qty) || 0), 0);
+      if(pageHeight - dayTableY < 16){
+        doc.addPage();
+        dayTableY = 20;
+      }
+      doc.autoTable({
+        startY: dayTableY,
+        margin: { left, right: left },
+        body: [["TOTAL VENTAS DEL MES", pdfMoney(sumTotal(salesMonth))]],
+        theme: "plain",
+        styles: { font: "helvetica", fontSize: 9, cellPadding: 2.6, fillColor: DARK, textColor: [255, 255, 255], fontStyle: "bold" },
+        columnStyles: { 0: { cellWidth: 128 }, 1: { halign: "right", cellWidth: 46 } }
       });
 
       /* --- Detalle: gastos del día --- */
@@ -492,8 +586,7 @@
         doc.setFont("helvetica", "normal");
         doc.setFontSize(8);
         doc.setTextColor(120, 120, 120);
-        doc.text("Volcano Vibes · Reporte de ventas", left, pageHeight - 8);
-        doc.text(`Página ${i} de ${pages}`, right, pageHeight - 8, { align: "right" });
+        doc.text(`Volcano Vibes - Reporte de ventas - Página ${i} de ${pages}`, pageWidth / 2, pageHeight - 8, { align: "center" });
       }
 
       doc.save(`volcano-vibes-reporte-${getOpenDay().businessDate}.pdf`);
