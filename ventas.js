@@ -609,6 +609,11 @@
       const f = getFinancials();
       const report = getReportContext();
       const salesToday = [...getTodaySales()].sort((a, b) => (a.ts || 0) - (b.ts || 0));
+      const salesMonth = getMonthSales().sort((a, b) => {
+        const dateOrder = String(a.businessDate || "").localeCompare(String(b.businessDate || ""));
+        return dateOrder || String(a.time || "").localeCompare(String(b.time || ""), "es", { numeric: true })
+          || (Number(a.ts) || 0) - (Number(b.ts) || 0);
+      });
       const monthRows = getMonthRows(loadDay());
       const expensesToday = getTodayExpenses();
       const expensesMonth = getMonthExpenses();
@@ -765,6 +770,139 @@
       setStyle(wsMonth, monthTotalRow, 1, { font: font({ bold: true, color: { rgb: "FFFFFF" } }), fill: fill("162334"), border: box, alignment: { horizontal: "center", vertical: "center" } });
       setStyle(wsMonth, monthTotalRow, 2, { font: font({ bold: true, color: { rgb: "FFFFFF" } }), fill: fill("162334"), border: box, numFmt: FMT, alignment: { horizontal: "right", vertical: "center" } });
 
+      /* ----- Hoja 4: Ventas del mes por día ----- */
+      const salesMonthHead = ["Hora", "Producto", "Cant.", "Método", "Total"];
+      const salesMonthSheetRows = [["Ventas del mes por día"], [report.monthLabel], []];
+      const salesMonthRowTypes = [];
+      const salesByBusinessDate = new Map();
+      salesMonth.forEach(sale => {
+        const salesForDate = salesByBusinessDate.get(sale.businessDate) || [];
+        salesForDate.push(sale);
+        salesByBusinessDate.set(sale.businessDate, salesForDate);
+      });
+      Array.from(salesByBusinessDate.entries())
+        .sort(([dateA], [dateB]) => dateA.localeCompare(dateB))
+        .forEach(([businessDate, salesForDate]) => {
+          const dateLabel = new Date(businessDate + "T00:00:00")
+            .toLocaleDateString("es-CR", { day: "2-digit", month: "2-digit", year: "numeric" });
+          const dateRow = salesMonthSheetRows.length;
+          salesMonthSheetRows.push([`Fecha de negocio: ${dateLabel}`]);
+          salesMonthRowTypes.push({ row: dateRow, type: "date" });
+
+          const salesByTurn = new Map();
+          salesForDate.forEach(sale => {
+            const turnSales = salesByTurn.get(sale.dayId) || [];
+            turnSales.push(sale);
+            salesByTurn.set(sale.dayId, turnSales);
+          });
+          const hasMultipleTurns = salesForDate.every(sale => sale.dayId)
+            && salesByTurn.size > 1;
+          const turns = hasMultipleTurns
+            ? Array.from(salesByTurn.values()).sort((turnA, turnB) => {
+              const firstA = [...turnA].sort((a, b) =>
+                String(a.time || "").localeCompare(String(b.time || ""), "es", { numeric: true })
+                || (Number(a.ts) || 0) - (Number(b.ts) || 0))[0];
+              const firstB = [...turnB].sort((a, b) =>
+                String(a.time || "").localeCompare(String(b.time || ""), "es", { numeric: true })
+                || (Number(a.ts) || 0) - (Number(b.ts) || 0))[0];
+              return String(firstA.time || "").localeCompare(String(firstB.time || ""), "es", { numeric: true })
+                || (Number(firstA.ts) || 0) - (Number(firstB.ts) || 0);
+            })
+            : [salesForDate];
+          let salesRowCount = 0;
+          turns.forEach((turnSales, turnIndex) => {
+            if(hasMultipleTurns){
+              const turnRow = salesMonthSheetRows.length;
+              salesMonthSheetRows.push([`Turno ${turnIndex + 1}`]);
+              salesMonthRowTypes.push({ row: turnRow, type: "turn" });
+            }
+            const headerRow = salesMonthSheetRows.length;
+            salesMonthSheetRows.push(salesMonthHead);
+            salesMonthRowTypes.push({ row: headerRow, type: "head" });
+            turnSales.sort((a, b) =>
+              String(a.time || "").localeCompare(String(b.time || ""), "es", { numeric: true })
+              || (Number(a.ts) || 0) - (Number(b.ts) || 0))
+              .forEach(sale => {
+                const saleRow = salesMonthSheetRows.length;
+                salesMonthSheetRows.push([
+                  sale.time || "", sale.product, Number(sale.qty) || 0,
+                  paymentLabel(sale), Number(sale.total) || 0
+                ]);
+                salesMonthRowTypes.push({ row: saleRow, type: "sale", index: salesRowCount++ });
+              });
+          });
+
+          const dayTotalRow = salesMonthSheetRows.length;
+          salesMonthSheetRows.push([
+            "", "TOTAL DEL DÍA",
+            salesForDate.reduce((sum, sale) => sum + (Number(sale.qty) || 0), 0),
+            "", sumTotal(salesForDate)
+          ]);
+          salesMonthRowTypes.push({ row: dayTotalRow, type: "dayTotal" });
+        });
+
+      const salesMonthTotalRow = salesMonthSheetRows.length;
+      salesMonthSheetRows.push([
+        "", "TOTAL VENTAS DEL MES",
+        salesMonth.reduce((sum, sale) => sum + (Number(sale.qty) || 0), 0),
+        "", sumTotal(salesMonth)
+      ]);
+      salesMonthRowTypes.push({ row: salesMonthTotalRow, type: "monthTotal" });
+      const wsSalesMonth = XLSX.utils.aoa_to_sheet(salesMonthSheetRows);
+      wsSalesMonth["!cols"] = [{ wch: 10 }, { wch: 42 }, { wch: 10 }, { wch: 18 }, { wch: 18 }];
+      wsSalesMonth["!merges"] = [
+        { s: { r: 0, c: 0 }, e: { r: 0, c: 4 } },
+        { s: { r: 1, c: 0 }, e: { r: 1, c: 4 } },
+        ...salesMonthRowTypes
+          .filter(row => row.type === "date" || row.type === "turn")
+          .map(row => ({ s: { r: row.row, c: 0 }, e: { r: row.row, c: 4 } }))
+      ];
+      setRow(wsSalesMonth, 0, 0, 4, {
+        font: font({ sz: 16, bold: true, color: { rgb: "FFFFFF" } }),
+        fill: fill("162334"), border: box,
+        alignment: { horizontal: "left", vertical: "center", indent: 1 }
+      });
+      setRow(wsSalesMonth, 1, 0, 4, {
+        font: font({ sz: 11, color: { rgb: "526276" } }),
+        fill: fill("EEF2F6"), border: box,
+        alignment: { horizontal: "left", vertical: "center", indent: 1 }
+      });
+      salesMonthRowTypes.forEach(({ row, type, index }) => {
+        if(type === "date"){
+          setRow(wsSalesMonth, row, 0, 4, {
+            font: font({ bold: true, color: { rgb: "FFFFFF" } }),
+            fill: fill("293A4D"), border: box,
+            alignment: { horizontal: "left", vertical: "center", indent: 1 }
+          });
+        }else if(type === "turn"){
+          setRow(wsSalesMonth, row, 0, 4, {
+            font: font({ bold: true, color: { rgb: "263445" } }),
+            fill: fill("ECF0F4"), border: box,
+            alignment: { horizontal: "left", vertical: "center", indent: 1 }
+          });
+        }else if(type === "head"){
+          for(let column = 0; column < salesMonthHead.length; column++){
+            setStyle(wsSalesMonth, row, column, {
+              font: font({ bold: true, color: { rgb: "FFFFFF" } }),
+              fill: fill("B63835"), border: box,
+              alignment: { horizontal: column === 2 ? "center" : column === 4 ? "right" : "left", vertical: "center", wrapText: true }
+            });
+          }
+        }else{
+          const isTotal = type === "dayTotal" || type === "monthTotal";
+          for(let column = 0; column < salesMonthHead.length; column++){
+            const money = column === 4;
+            setStyle(wsSalesMonth, row, column, {
+              font: font({ bold: isTotal, color: isTotal ? { rgb: "FFFFFF" } : { rgb: "263445" } }),
+              fill: fill(isTotal ? "162334" : index % 2 === 0 ? "FFFFFF" : "F7F8FA"),
+              border: box,
+              numFmt: money ? FMT : undefined,
+              alignment: { horizontal: money ? "right" : column === 2 ? "center" : "left", vertical: "center" }
+            });
+          }
+        }
+      });
+
       const expenseSheet = (expenses, total, totalLabel) => {
         const headers = ["Fecha", "Hora", "Descripción", "Categoría", "Cantidad", "Importe"];
         const rows = [headers];
@@ -816,6 +954,7 @@
       XLSX.utils.book_append_sheet(wb, ws, "Resumen");
       XLSX.utils.book_append_sheet(wb, wsTurn, "Ventas del turno");
       XLSX.utils.book_append_sheet(wb, wsMonth, "Acumulado del mes");
+      XLSX.utils.book_append_sheet(wb, wsSalesMonth, "Ventas del mes por día");
       XLSX.utils.book_append_sheet(wb, wsExpensesDay, "Gastos del día");
       XLSX.utils.book_append_sheet(wb, wsExpensesMonth, "Gastos del mes");
       XLSX.writeFile(wb, `volcano-vibes-reporte-${getOpenDay().businessDate}.xlsx`);
