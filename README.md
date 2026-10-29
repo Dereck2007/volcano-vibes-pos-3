@@ -23,7 +23,7 @@ En vez de abrir una ventana nueva (`window.open`) y escribirle el tiquete despu�
 - Firestore es la fuente de verdad para `vv_day_sales` (ventas del turno activo), `vv_archive` (ventas archivadas), gastos, cierres, turno abierto y secuencia de facturas.
 - El documento compartido conserva la ruta existente `volcano_vibes/admin`; las ventas históricas guardan el nombre y precio del producto como parte de cada fila, por lo que quitar un producto del catálogo no borra ventas anteriores.
 - `localStorage` conserva una caché del último estado remoto y una cola de operaciones pendientes (`vv_pending_operations`). Un cobro o gasto solo se confirma en pantalla cuando la transacción remota se confirma. Si el resultado de una operación queda incierto, se conserva el carrito y puede reintentarse con el mismo identificador para evitar duplicados.
-- El catálogo y los insumos se leen de Firestore. Si los campos `vv_products` o `vv_supplies` no existen en un documento ya creado, la aplicación los agrega de forma aditiva con el catálogo actual; no modifica ventas, gastos, cierres ni turnos existentes.
+- El catálogo y los insumos se leen de Firestore. Al iniciar, la aplicación sincroniza `vv_products` con el catálogo definido en `store.js`, así se reflejan cambios de precios, productos agregados y productos eliminados incluso si Firestore ya tenía un catálogo anterior. Si `vv_supplies` no existe en un documento ya creado, lo agrega de forma aditiva. La sincronización del catálogo solo modifica `vv_products`; no modifica ventas, gastos, cierres ni turnos existentes.
 
 ## Cómo funciona la pantalla de Gastos
 - Los gastos usan campos separados (`vv_expense_day` y `vv_expense_archive`) en el estado compartido de Firestore; no se mezclan con los registros de venta.

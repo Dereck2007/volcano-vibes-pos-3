@@ -592,23 +592,31 @@ window.VV = (function(){
           }
         }else{
           const remote = normalizedState(initialSnapshot.data());
-          const valid = installRemoteState(remote, true);
-          if(valid){
-            const additive = {};
-            if(initialSnapshot.data().vv_products === undefined) additive.vv_products = JSON.stringify(PRODUCTS);
-            if(initialSnapshot.data().vv_supplies === undefined) additive.vv_supplies = JSON.stringify(SUPPLIES);
-            if(Object.keys(additive).length){
+          const validationError = cloudStateValidationError(remote);
+          if(validationError){
+            installRemoteState(remote, true);
+          }else{
+            const productsNeedSync = initialSnapshot.data().vv_products === undefined
+              || JSON.stringify(remote.vv_products) !== JSON.stringify(PRODUCTS);
+            const suppliesNeedSync = initialSnapshot.data().vv_supplies === undefined;
+            if(productsNeedSync || suppliesNeedSync){
               initializationOperation = "write";
               await cloudDb.runTransaction(async transaction => {
                 const current = await transaction.get(cloudRef);
                 if(!current.exists) throw new Error("El documento desapareció durante la inicialización.");
                 const patch = {};
-                if(current.data().vv_products === undefined) patch.vv_products = additive.vv_products;
-                if(current.data().vv_supplies === undefined) patch.vv_supplies = additive.vv_supplies;
+                const currentProducts = parseCloudField(current.data().vv_products, PRODUCTS);
+                if(current.data().vv_products === undefined
+                  || JSON.stringify(currentProducts) !== JSON.stringify(PRODUCTS)){
+                  patch.vv_products = JSON.stringify(PRODUCTS);
+                }
+                if(current.data().vv_supplies === undefined) patch.vv_supplies = JSON.stringify(SUPPLIES);
                 if(Object.keys(patch).length) transaction.update(cloudRef, patch);
               });
               initializationOperation = "read";
+              if(productsNeedSync) remote.vv_products = PRODUCTS;
             }
+            installRemoteState(remote, true);
           }
         }
         if(cloudUnsubscribe) cloudUnsubscribe();
