@@ -22,16 +22,16 @@ window.VV = (function(){
 
     // Burritos y Wraps
     { id: "b1", cat: "burritos", name: "Burrito Desayuno", desc: "Burritos y Wraps", price: 4850 },
-    { id: "b2", cat: "burritos", name: "Wrap Camarón", desc: "Burritos y Wraps", price: 5000 },
+    { id: "b2", cat: "burritos", name: "Wrap Camarón", desc: "Burritos y Wraps", price: 4900 },
     { id: "b3", cat: "burritos", name: "Wrap Pescado", desc: "Burritos y Wraps", price: 4850 },
     { id: "b4", cat: "burritos", name: "Wrap Pollo BBQ", desc: "Burritos y Wraps", price: 4850 },
     { id: "b5", cat: "burritos", name: "Wrap Vegetariano", desc: "Burritos y Wraps", price: 4250 },
 
     // Nachos y Papas
-    { id: "n1", cat: "nachos", name: "Nacho Mixto Arenal (El Favorito)", desc: "Nachos y Papas", price: 4950 },
+    { id: "n1", cat: "nachos", name: "Nacho Mixto Arenal (El Favorito)", desc: "Nachos y Papas", price: 4960 },
     { id: "n2", cat: "nachos", name: "Nacho Pollo", desc: "Nachos y Papas", price: 3850 },
     { id: "n3", cat: "nachos", name: "Nacho Carne", desc: "Nachos y Papas", price: 3850 },
-    { id: "n4", cat: "nachos", name: "Nacho Queso", desc: "Nachos y Papas", price: 2850 },
+    { id: "n4", cat: "nachos", name: "Nacho Queso", desc: "Nachos y Papas", price: 2650 },
     { id: "n5", cat: "nachos", name: "Papa Asada (Loca)", desc: "Nachos y Papas", price: 2650 },
     { id: "n6", cat: "nachos", name: "Salchipapas", desc: "Nachos y Papas", price: 2950 },
     { id: "n7", cat: "nachos", name: "Papas Fritas (Locas)", desc: "Nachos y Papas", price: 1850 },
@@ -39,15 +39,15 @@ window.VV = (function(){
     // Quesadillas
     { id: "q1", cat: "quesadillas", name: "Quesadilla Camarón", desc: "Quesadillas", price: 5000 },
     { id: "q2", cat: "quesadillas", name: "Quesadilla Carne", desc: "Quesadillas", price: 3950 },
-    { id: "q3", cat: "quesadillas", name: "Quesadilla Pollo", desc: "Quesadillas", price: 3950 },
-    { id: "q4", cat: "quesadillas", name: "Quesadilla Vegetariana", desc: "Quesadillas", price: 2950 },
+    { id: "q3", cat: "quesadillas", name: "Quesadilla Pollo", desc: "Quesadillas", price: 2950 },
+    { id: "q4", cat: "quesadillas", name: "Quesadilla Vegetariana", desc: "Quesadillas", price: 2650 },
     { id: "q5", cat: "quesadillas", name: "Quesadilla Queso", desc: "Quesadillas", price: 2650 },
 
     // Combos Volcano
     { id: "c1", cat: "combos", name: "Nachos Queso + Papas + Fresco", desc: "Combos Volcano", price: 6950 },
-    { id: "c2", cat: "combos", name: "Salchipapas + Hamb. Queso + Fresco", desc: "Combos Volcano", price: 5850 },
+    { id: "c2", cat: "combos", name: "Salchipapas + Hamb. Queso + Fresco", desc: "Combos Volcano", price: 3950 },
     { id: "c3", cat: "combos", name: "2 Hamb. Queso + Fresco", desc: "Combos Volcano", price: 4850 },
-    { id: "c4", cat: "combos", name: "1 Hamb. Queso Sencilla", desc: "Combos Volcano", price: 1650 },
+    { id: "c4", cat: "combos", name: "1 Hamb. Queso Sencilla", desc: "Combos Volcano", price: 1850 },
     { id: "c5", cat: "combos", name: "1 Burrito Queso Batata", desc: "Combos Volcano", price: 1750 },
     { id: "c6", cat: "combos", name: "Dedos Pollo o Pescado", desc: "Combos Volcano", price: 3950 },
     { id: "c7", cat: "combos", name: "Orden de Papas (Sola)", desc: "Combos Volcano", price: 1200 },
@@ -65,10 +65,8 @@ window.VV = (function(){
     // Batidos y Bebidas
     { id: "d1", cat: "bebidas", name: "Mangonada", desc: "Batidos y Bebidas", price: 2650 },
     { id: "d2", cat: "bebidas", name: "Batido de Fresa(Leche)", desc: "Batidos y Bebidas", price: 1950 },
-    { id: "d3", cat: "bebidas", name: "Batido de Piña(Leche)", desc: "Batidos y Bebidas", price: 1950 },
     { id: "d4", cat: "bebidas", name: "Batido de Mango(Leche)", desc: "Batidos y Bebidas", price: 1950 },
     { id: "d5", cat: "bebidas", name: "Batido de Fresa(Agua)", desc: "Batidos y Bebidas", price: 1250 },
-    { id: "d6", cat: "bebidas", name: "Batido de Piña(Agua)", desc: "Batidos y Bebidas", price: 1250 },
     { id: "d7", cat: "bebidas", name: "Batido de Mango(Agua)", desc: "Batidos y Bebidas", price: 1250 },
     { id: "d8", cat: "bebidas", name: "Café Frío Volcano", desc: "Batidos y Bebidas", price: 1950 },
     { id: "d9", cat: "bebidas", name: "Bebida Gaseosa", desc: "Batidos y Bebidas", price: 1200 },
