@@ -61,6 +61,9 @@ window.VV = (function(){
     { id: "v6", cat: "ceviches", name: "Caldosa (Grande)", desc: "Ceviches y Caldosas", price: 1000 },
     { id: "v8", cat: "ceviches", name: "Chichaldosa (Chica)", desc: "Ceviches y Caldosas", price: 1950 },
     { id: "v7", cat: "ceviches", name: "Chichaldosa (Grande)", desc: "Ceviches y Caldosas", price: 3950 },
+    // Empanadas
+    { id: "e1", cat: "empanadas", name: "Empanada de Carne", desc: "Empanadas", price: 1000 },
+    { id: "e2", cat: "empanadas", name: "Empanada de Pollo", desc: "Empanadas", price: 1000 },
 
     // Batidos y Bebidas
     { id: "d1", cat: "bebidas", name: "Mangonada", desc: "Batidos y Bebidas", price: 2650 },
@@ -68,10 +71,14 @@ window.VV = (function(){
     { id: "d4", cat: "bebidas", name: "Batido de Mango(Leche)", desc: "Batidos y Bebidas", price: 1950 },
     { id: "d5", cat: "bebidas", name: "Batido de Fresa(Agua)", desc: "Batidos y Bebidas", price: 1250 },
     { id: "d7", cat: "bebidas", name: "Batido de Mango(Agua)", desc: "Batidos y Bebidas", price: 1250 },
-    { id: "d8", cat: "bebidas", name: "Café Frío Volcano", desc: "Batidos y Bebidas", price: 1950 },
-    { id: "d9", cat: "bebidas", name: "Bebida Gaseosa", desc: "Batidos y Bebidas", price: 1200 },
+    { id: "d8", cat: "bebidas", name: "Batido de Piña(Agua)", desc: "Batidos y Bebidas", price: 1250 },
+    { id: "d9", cat: "bebidas", name: "Batido de Piña(Leche)", desc: "Batidos y Bebidas", price: 1950 },
+    { id: "d10", cat: "bebidas", name: "Café Frío Volcano", desc: "Batidos y Bebidas", price: 1950 },
+    { id: "d11", cat: "bebidas", name: "Café Negro", desc: "Batidos y Bebidas", price: 650 },
+    { id: "d12", cat: "bebidas", name: "Café Con Leche", desc: "Batidos y Bebidas", price: 1200 },
+    { id: "d13", cat: "bebidas", name: "Bebida Gaseosa", desc: "Batidos y Bebidas", price: 1200 },
   ];
-  const SODA_PRODUCT_ID = "d9";
+  const SODA_PRODUCT_ID = "d13";
   const SODA_PRICE = 1200;
 
   const CATEGORIES = [
@@ -82,6 +89,7 @@ window.VV = (function(){
     { id: "quesadillas", label: "Quesadillas" },
     { id: "combos", label: "Combos" },
     { id: "ceviches", label: "Ceviches y Caldosas" },
+    { id: "empanadas", label: "Empanadas" },
     { id: "bebidas", label: "Batidos y Bebidas" },
   ];
 
