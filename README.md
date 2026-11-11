@@ -34,6 +34,13 @@ En vez de abrir una ventana nueva (`window.open`) y escribirle el tiquete despu�
 ## Resumen financiero (ganancia neta)
 En "Ventas y reportes" ahora hay un panel **Resumen financiero** que resta los gastos registrados en Gastos a las ventas, mostrando "Ganancia neta" tanto de hoy como del mes en curso (las dos, no solo una — así se ve completo de un vistazo, como en cualquier reporte de caja diario/mensual). El PDF y el Excel que exportas desde ahí ahora también incluyen, arriba de la tabla de detalle, los tres montos: Ventas totales, Gastos totales y Ganancia neta — del período que tengas seleccionado (día o mes).
 
+### Aportes de inversión
+- En **Ventas y reportes**, cualquier usuario que ya tenga acceso a la pantalla puede registrar aportes indicando socio, monto entero positivo, fecha y descripción de hasta 500 caracteres. El socio se precarga con el usuario actual.
+- El historial se ordena por fecha; solo se puede editar la descripción y los aportes anulados permanecen tachados, pero no se incluyen en los cálculos.
+- El resumen suma aportes de hoy y del mes por fecha, y muestra el total con inversión. También presenta total vigente por socio y su porcentaje de participación.
+- El PDF conserva las filas de inversión en el resumen y permite incluir u omitir el detalle de aportes.
+- Esta colección nueva se almacena en `localStorage` como `vv_aportes_inversion`; las fechas se guardan como milisegundos desde epoch y los cambios se actualizan en otras pestañas del mismo navegador. No se sincroniza con Firestore ni entre dispositivos y no usa Firebase Authentication ni reglas de Firestore.
+
 ## Inicio de sesión (usuario y contraseña)
 El login solo se pide una vez, al entrar por `index.html` (Punto de venta) — de ahí en adelante puedes moverte a Gastos y a Ventas y reportes sin que te lo vuelvan a pedir.
 - Usuario y contraseña por defecto: **admin / admin**. Se cambian en `store.js`, en el objeto `AUTH` (arriba del archivo).

@@ -654,6 +654,20 @@ td.money{ color: var(--gold); font-weight: 700; }
   font-size: 15px;
   margin-bottom: 12px;
 }
+.modal textarea{
+  width: 100%;
+  min-height: 92px;
+  resize: vertical;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 11px 12px;
+  color: var(--text);
+  font: 14px var(--font-body);
+  margin-bottom: 16px;
+}
+.investment-modal{ max-width: 500px; }
+.investment-modal .modal__actions{ margin-top: 6px; }
 .modal__change{ margin: 0 0 18px; font-size: 14px; }
 .modal__change strong{ color: var(--lime); }
 .modal__change--bad strong{ color: #E85D6B; }
@@ -834,3 +848,62 @@ td.money{ color: var(--gold); font-weight: 700; }
 }
 .profit-row--net span:last-child{ color: var(--lime); }
 .profit-row--net.profit-row--negative span:last-child{ color: #E85D6B; }
+.profit-row--investment-total{
+  border-top: 1px dashed var(--line);
+  margin-top: 2px;
+  padding-top: 8px;
+}
+.investment-panel__head{
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+.investment-totals{
+  display: grid;
+  grid-template-columns: minmax(180px, 0.7fr) minmax(0, 1.3fr);
+  gap: 16px;
+  align-items: start;
+  margin-bottom: 20px;
+}
+.investment-panel .stat{ min-height: 102px; }
+.investment-history__description{
+  min-width: 180px;
+  max-width: 360px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.investment-history__actions{
+  min-width: 190px;
+  white-space: nowrap;
+}
+.investment-history__actions button{
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-panel-2);
+  color: var(--text);
+  cursor: pointer;
+  padding: 6px 8px;
+  margin: 2px;
+  font: 600 11px var(--font-body);
+}
+.investment-history__actions button:hover{ border-color: var(--ember); }
+.investment-history__actions .investment-annul{ color: #ff8d8d; }
+.investment-history__row--annulled td{
+  color: var(--text-dim);
+  text-decoration: line-through;
+  opacity: 0.65;
+}
+.pdf-option{
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.pdf-option input{ accent-color: var(--lime); }
+
+@media (max-width: 700px){
+  .investment-panel__head{ flex-direction: column; }
+  .investment-totals{ grid-template-columns: 1fr; }
+}

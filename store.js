@@ -234,6 +234,7 @@ window.VV = (function(){
   const CLOUD_CACHE_MARKER = "vv_cloud_cache_signature";
   const PENDING_OPERATIONS_KEY = "vv_pending_operations";
   const CONFLICT_BACKUP_KEY = "vv_sync_conflict_backup";
+  const INVESTMENT_CONTRIBUTIONS_KEY = "vv_aportes_inversion";
 
   function isCloudConfigured(){ return !!FIREBASE_CONFIG.apiKey; }
   function cloudSnapshot(){ return cloudState; }
@@ -1041,6 +1042,89 @@ window.VV = (function(){
     return Array.from(map.values()).sort((a,b) => b.total - a.total);
   }
 
+  /* ---------- Aportes de inversión (almacenamiento local) ---------- */
+  function loadInvestmentContributions(){
+    let stored;
+    try{
+      stored = localStorage.getItem(INVESTMENT_CONTRIBUTIONS_KEY);
+    }catch(err){
+      throw new Error("No se pudieron leer los aportes de inversión del almacenamiento local.");
+    }
+    if(stored === null) return [];
+    try{
+      const contributions = JSON.parse(stored);
+      if(!Array.isArray(contributions)) throw new Error("El formato debe ser una lista.");
+      return contributions;
+    }catch(err){
+      throw new Error("Los aportes de inversión guardados tienen un formato inválido.");
+    }
+  }
+
+  function saveInvestmentContributions(contributions){
+    try{
+      localStorage.setItem(INVESTMENT_CONTRIBUTIONS_KEY, JSON.stringify(contributions));
+    }catch(err){
+      throw new Error("No se pudieron guardar los aportes de inversión en este dispositivo.");
+    }
+    window.dispatchEvent(new CustomEvent("vv:investment-contributions"));
+    return contributions;
+  }
+
+  function registerInvestmentContribution({ socioNombre, monto, fecha, descripcion }){
+    const socio = String(socioNombre || "").trim();
+    const amount = Number(monto);
+    const date = Number(fecha);
+    const description = String(descripcion || "");
+    if(!socio) throw new TypeError("El nombre del socio es obligatorio.");
+    if(!Number.isSafeInteger(amount) || amount <= 0){
+      throw new TypeError("El monto debe ser un entero mayor que cero.");
+    }
+    if(!Number.isFinite(date) || date <= 0) throw new TypeError("La fecha del aporte no es válida.");
+    if(description.length > 500) throw new TypeError("La descripción no puede superar 500 caracteres.");
+    const now = new Date();
+    const contribution = {
+      id: typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : "aporte-" + now.getTime() + "-" + Math.random().toString(36).slice(2),
+      socioId: socio.toLocaleLowerCase("es-CR"),
+      socioNombre: socio,
+      monto: amount,
+      fecha: date,
+      descripcion: description,
+      creadoEn: now.getTime(),
+      descripcionEditadaEn: null,
+      anulado: false
+    };
+    saveInvestmentContributions([...loadInvestmentContributions(), contribution]);
+    return contribution;
+  }
+
+  function editInvestmentContributionDescription(id, descripcion){
+    const description = String(descripcion || "");
+    if(description.length > 500) throw new TypeError("La descripción no puede superar 500 caracteres.");
+    const contributions = loadInvestmentContributions();
+    const index = contributions.findIndex(item => item.id === id);
+    if(index < 0) throw new Error("No se encontró el aporte seleccionado.");
+    if(contributions[index].anulado) throw new Error("No se puede editar un aporte anulado.");
+    const updated = contributions.map((item, itemIndex) => itemIndex === index
+      ? { ...item, descripcion: description, descripcionEditadaEn: Date.now() }
+      : item);
+    saveInvestmentContributions(updated);
+    return updated[index];
+  }
+
+  function annulInvestmentContribution(id){
+    const contributions = loadInvestmentContributions();
+    const index = contributions.findIndex(item => item.id === id);
+    if(index < 0) throw new Error("No se encontró el aporte seleccionado.");
+    if(contributions[index].anulado) return contributions[index];
+    const updated = contributions.map((item, itemIndex) => itemIndex === index
+      ? { ...item, anulado: true }
+      : item);
+    saveInvestmentContributions(updated);
+    return updated[index];
+  }
+
   async function registerExpense(lines, existingOperationId, originalDayId){
     requireCloudReady();
     const normalizedLines = lines.map(item => ({ name: item.name, qty: item.qty, price: item.price }));
@@ -1190,6 +1274,8 @@ window.VV = (function(){
     nextInvoiceNumber, registerSale,
     loadExpenseDay, saveExpenseDay, loadExpenseArchive, saveExpenseArchive,
     archiveExpenseItems, getExpenseMonthRows, registerExpense, getOpenDayExpenses, loadClosures, closeOpenDay,
+    loadInvestmentContributions, registerInvestmentContribution,
+    editInvestmentContributionDescription, annulInvestmentContribution,
     AUTH, initCloud, disposeCloud, retryCloud, resolveCloudConflict, retryPendingOperations,
     isCloudConfigured, isCloudReady, hasCloudSnapshot(){ return cloudRemoteExists && !!cloudState; }, getCloudStatus
   };

@@ -2,10 +2,14 @@
   "use strict";
   const {
     CRC, escapeHtml, monthKey, getOpenDay, loadDay, loadArchive, loadExpenseDay, loadExpenseArchive,
-    getMonthRows, getOpenDaySales, getOpenDayExpenses, closeOpenDay
+    getMonthRows, getOpenDaySales, getOpenDayExpenses, closeOpenDay,
+    loadInvestmentContributions, registerInvestmentContribution,
+    editInvestmentContributionDescription, annulInvestmentContribution
   } = window.VV;
 
   let day = loadDay();
+  let investmentContributions = [];
+  let investmentLoadError = null;
 
   /* ---------- Reloj ---------- */
   function tickClock(){
@@ -98,6 +102,226 @@
     };
   }
 
+  function localDateKey(value){
+    const date = value && typeof value.toDate === "function" ? value.toDate() : new Date(Number(value));
+    if(!Number.isFinite(date.getTime())) return "";
+    return date.getFullYear() + "-" + String(date.getMonth() + 1).padStart(2, "0")
+      + "-" + String(date.getDate()).padStart(2, "0");
+  }
+  function investmentDateTimestamp(dateString){
+    const [year, month, dayOfMonth] = dateString.split("-").map(Number);
+    return new Date(year, month - 1, dayOfMonth, 12).getTime();
+  }
+  function localDateInputValue(date){
+    return date.getFullYear() + "-" + String(date.getMonth() + 1).padStart(2, "0")
+      + "-" + String(date.getDate()).padStart(2, "0");
+  }
+  const investmentMoney = amount => "CRC " + Math.round(Number(amount) || 0).toLocaleString("en-US");
+
+  function refreshInvestmentContributions(){
+    try{
+      investmentContributions = loadInvestmentContributions();
+      investmentLoadError = null;
+      return true;
+    }catch(err){
+      investmentContributions = [];
+      investmentLoadError = err;
+      console.error("No se pudieron leer los aportes de inversión:", err);
+      return false;
+    }
+  }
+
+  function getInvestmentFinancials(){
+    const businessDate = getOpenDay().businessDate;
+    const currentMonth = monthKey(businessDate);
+    const validContributions = investmentContributions.filter(item =>
+      item && !item.anulado && Number.isSafeInteger(Number(item.monto)) && Number(item.monto) > 0);
+    return {
+      today: validContributions
+        .filter(item => localDateKey(item.fecha) === businessDate)
+        .reduce((sum, item) => sum + Number(item.monto), 0),
+      month: validContributions
+        .filter(item => localDateKey(item.fecha).slice(0, 7) === currentMonth)
+        .reduce((sum, item) => sum + Number(item.monto), 0)
+    };
+  }
+
+  function renderInvestmentSection(){
+    const recordsLoaded = refreshInvestmentContributions();
+    const investment = getInvestmentFinancials();
+    document.getElementById("pfAportesHoy").textContent = recordsLoaded ? investmentMoney(investment.today) : "—";
+    document.getElementById("pfAportesMes").textContent = recordsLoaded ? investmentMoney(investment.month) : "—";
+    const active = investmentContributions.filter(item =>
+      item && !item.anulado && Number.isSafeInteger(Number(item.monto)) && Number(item.monto) > 0);
+    const total = active.reduce((sum, item) => sum + Number(item.monto), 0);
+    document.getElementById("investmentTotal").textContent = investmentMoney(total);
+
+    const partnerTotals = new Map();
+    active.forEach(item => {
+      const partner = String(item.socioNombre || "Socio sin nombre");
+      const partnerId = String(item.socioId || partner.trim().toLocaleLowerCase("es-CR"));
+      const current = partnerTotals.get(partnerId) || { name: partner, total: 0 };
+      current.total += Number(item.monto);
+      partnerTotals.set(partnerId, current);
+    });
+    const partnersBody = document.querySelector("#investmentPartners tbody");
+    partnersBody.replaceChildren();
+    const partnerEntries = Array.from(partnerTotals.values()).sort((a, b) => b.total - a.total);
+    partnerEntries.forEach(({ name, total: amount }) => {
+      const row = document.createElement("tr");
+      [name, investmentMoney(amount), (total ? amount / total * 100 : 0).toFixed(1) + "%"]
+        .forEach((value, index) => {
+          const cell = document.createElement("td");
+          cell.textContent = value;
+          if(index > 0) cell.className = "num";
+          row.appendChild(cell);
+        });
+      partnersBody.appendChild(row);
+    });
+    const emptyPartners = document.getElementById("emptyInvestmentPartners");
+    emptyPartners.textContent = recordsLoaded ? "Todavía no hay aportes vigentes." : investmentLoadError.message;
+    emptyPartners.style.display = partnerEntries.length ? "none" : "block";
+
+    const historyBody = document.querySelector("#investmentHistory tbody");
+    historyBody.replaceChildren();
+    const history = [...investmentContributions].sort((a, b) => Number(b.fecha) - Number(a.fecha));
+    history.forEach(item => {
+      const row = document.createElement("tr");
+      if(item.anulado) row.classList.add("investment-history__row--annulled");
+      const values = [
+        localDateKey(item.fecha)
+          ? new Date(Number(item.fecha)).toLocaleDateString("es-CR")
+          : "Fecha no válida",
+        String(item.socioNombre || "Socio sin nombre"),
+        investmentMoney(item.monto),
+        String(item.descripcion || "")
+      ];
+      values.forEach((value, index) => {
+        const cell = document.createElement("td");
+        cell.textContent = value;
+        if(index === 2) cell.className = "num money";
+        if(index === 3) cell.className = "investment-history__description";
+        row.appendChild(cell);
+      });
+      const actions = document.createElement("td");
+      actions.className = "investment-history__actions";
+      if(!item.anulado){
+        const editButton = document.createElement("button");
+        editButton.type = "button";
+        editButton.textContent = "Editar descripción";
+        editButton.addEventListener("click", () => {
+          editingInvestmentId = item.id;
+          editInvestmentForm.reset();
+          document.getElementById("editInvestmentDescription").value = item.descripcion || "";
+          editInvestmentOverlay.hidden = false;
+          document.getElementById("editInvestmentDescription").focus();
+        });
+        actions.appendChild(editButton);
+
+        const annulButton = document.createElement("button");
+        annulButton.type = "button";
+        annulButton.className = "investment-annul";
+        annulButton.textContent = "Anular";
+        annulButton.addEventListener("click", () => {
+          if(!window.confirm("¿Anular este aporte? Se conservará en el historial, pero dejará de sumar en los totales.")) return;
+          try{
+            annulInvestmentContribution(item.id);
+            toast("Aporte anulado.");
+          }catch(err){
+            toast("No se pudo anular el aporte. " + err.message);
+          }
+        });
+        actions.appendChild(annulButton);
+      }else{
+        actions.textContent = "Anulado";
+      }
+      row.appendChild(actions);
+      historyBody.appendChild(row);
+    });
+    const emptyHistory = document.getElementById("emptyInvestmentHistory");
+    emptyHistory.textContent = recordsLoaded ? "Todavía no hay aportes registrados." : investmentLoadError.message;
+    emptyHistory.style.display = history.length ? "none" : "block";
+  }
+
+  const investmentOverlay = document.getElementById("investmentOverlay");
+  const investmentForm = document.getElementById("investmentForm");
+  const editInvestmentOverlay = document.getElementById("editInvestmentOverlay");
+  const editInvestmentForm = document.getElementById("editInvestmentForm");
+  let editingInvestmentId = null;
+  document.getElementById("btnNewInvestment").addEventListener("click", () => {
+    investmentForm.reset();
+    document.getElementById("investmentPartner").value = window.VV.AUTH.currentUser();
+    document.getElementById("investmentDate").value = localDateInputValue(new Date());
+    investmentOverlay.hidden = false;
+    document.getElementById("investmentPartner").focus();
+  });
+  document.getElementById("btnCancelInvestment").addEventListener("click", () => {
+    investmentOverlay.hidden = true;
+  });
+  investmentOverlay.addEventListener("click", event => {
+    if(event.target === investmentOverlay) investmentOverlay.hidden = true;
+  });
+  investmentForm.addEventListener("submit", event => {
+    event.preventDefault();
+    const amount = Number(document.getElementById("investmentAmount").value);
+    const dateValue = document.getElementById("investmentDate").value;
+    if(!Number.isSafeInteger(amount) || amount <= 0){
+      toast("El monto debe ser un entero mayor que cero.");
+      return;
+    }
+    if(!dateValue || !Number.isFinite(investmentDateTimestamp(dateValue))){
+      toast("Selecciona una fecha válida para el aporte.");
+      return;
+    }
+    const saveButton = document.getElementById("btnSaveInvestment");
+    saveButton.disabled = true;
+    try{
+      registerInvestmentContribution({
+        socioNombre: document.getElementById("investmentPartner").value,
+        monto: amount,
+        fecha: investmentDateTimestamp(dateValue),
+        descripcion: document.getElementById("investmentDescription").value
+      });
+      investmentOverlay.hidden = true;
+      investmentForm.reset();
+      toast("Aporte registrado.");
+    }catch(err){
+      toast("No se pudo registrar el aporte. " + err.message);
+    }finally{
+      saveButton.disabled = false;
+    }
+  });
+  document.getElementById("btnCancelEditInvestment").addEventListener("click", () => {
+    editInvestmentOverlay.hidden = true;
+    editingInvestmentId = null;
+  });
+  editInvestmentOverlay.addEventListener("click", event => {
+    if(event.target === editInvestmentOverlay){
+      editInvestmentOverlay.hidden = true;
+      editingInvestmentId = null;
+    }
+  });
+  editInvestmentForm.addEventListener("submit", event => {
+    event.preventDefault();
+    const description = document.getElementById("editInvestmentDescription").value;
+    if(description.length > 500){
+      toast("La descripción no puede superar 500 caracteres.");
+      return;
+    }
+    const saveButton = document.getElementById("btnSaveEditInvestment");
+    saveButton.disabled = true;
+    try{
+      editInvestmentContributionDescription(editingInvestmentId, description);
+      editInvestmentOverlay.hidden = true;
+      editingInvestmentId = null;
+      toast("Descripción actualizada.");
+    }catch(err){
+      toast("No se pudo actualizar la descripción. " + err.message);
+    }finally{
+      saveButton.disabled = false;
+    }
+  });
+
   /* ---------- Ventas, pagos y ganancia neta (hoy y mes) ---------- */
   function getFinancials(){
     const salesDay = getTodaySales();
@@ -131,6 +355,7 @@
   }
 
   function paintProfit(f){
+    const investment = getInvestmentFinancials();
     document.getElementById("pfVentasHoy").textContent = CRC(f.ventasHoy);
     document.getElementById("pfGastosHoy").textContent = CRC(f.gastosHoy);
     const netHoyEl = document.getElementById("pfGananciaHoy");
@@ -142,15 +367,28 @@
     const netMesEl = document.getElementById("pfGananciaMes");
     netMesEl.textContent = CRC(f.gananciaMes);
     netMesEl.closest(".profit-row").classList.toggle("profit-row--negative", f.gananciaMes < 0);
+
+    document.getElementById("pfAportesHoy").textContent = investmentLoadError ? "—" : investmentMoney(investment.today);
+    document.getElementById("pfAportesMes").textContent = investmentLoadError ? "—" : investmentMoney(investment.month);
+    const totalToday = f.gananciaHoy + investment.today;
+    const totalMonth = f.gananciaMes + investment.month;
+    const totalTodayEl = document.getElementById("pfTotalInversionHoy");
+    const totalMonthEl = document.getElementById("pfTotalInversionMes");
+    totalTodayEl.textContent = investmentLoadError ? "—" : investmentMoney(totalToday);
+    totalMonthEl.textContent = investmentLoadError ? "—" : investmentMoney(totalMonth);
+    totalTodayEl.closest(".profit-row").classList.toggle("profit-row--negative", totalToday < 0);
+    totalMonthEl.closest(".profit-row").classList.toggle("profit-row--negative", totalMonth < 0);
   }
 
   /* ---------- Render ---------- */
   function renderAll(){
+    renderInvestmentSection();
     closeButton.disabled = !window.VV.isCloudReady();
     if(!window.VV.hasCloudSnapshot()){
       document.getElementById("openDayInfo").textContent = "Esperando datos de Firestore; las cifras aún no están disponibles.";
       ["statVentasHoy", "statPlatosHoy", "statTotalMes", "pfVentasHoy", "pfGastosHoy",
-        "pfGananciaHoy", "pfVentasMes", "pfGastosMes", "pfGananciaMes"].forEach(id => {
+        "pfGananciaHoy", "pfTotalInversionHoy", "pfVentasMes", "pfGastosMes", "pfGananciaMes",
+        "pfTotalInversionMes"].forEach(id => {
         document.getElementById(id).textContent = "—";
       });
       document.querySelector("#tableDay tbody").innerHTML = "";
@@ -230,6 +468,10 @@
 
   document.getElementById("btnPdf").addEventListener("click", () => {
     try{
+      if(!refreshInvestmentContributions()){
+        toast("No se pudieron leer los aportes de inversión; no se generó el PDF.");
+        return;
+      }
       if(!window.jspdf || !window.jspdf.jsPDF){
         toast("No se pudo cargar la librería de PDF. Revisa tu conexión a internet.");
         return;
@@ -241,6 +483,8 @@
       }
 
       const f = getFinancials();
+      const investment = getInvestmentFinancials();
+      const includeInvestmentDetails = document.getElementById("pdfIncludeInvestmentDetails").checked;
       const report = getReportContext();
       const salesToday = [...getTodaySales()].sort((a, b) => (a.ts || 0) - (b.ts || 0));
       const salesMonth = getMonthSales().sort((a, b) => {
@@ -304,6 +548,9 @@
       }
       addLine("expense", "(-) Gastos registrados", f.gastosHoy, f.gastosMes);
       addLine("net", "(=) Ganancia neta (Ventas - Gastos)", f.gananciaHoy, f.gananciaMes);
+      addLine("investment", "(+) Aportes de inversión", investment.today, investment.month);
+      addLine("investment-total", "(=) Total con inversión",
+        f.gananciaHoy + investment.today, f.gananciaMes + investment.month);
 
       doc.autoTable({
         startY: 47,
@@ -322,7 +569,8 @@
           if(info.kind === "cash"){ data.cell.styles.fillColor = [226, 243, 233]; }
           if(info.kind === "card"){ data.cell.styles.fillColor = [226, 236, 250]; }
           if(info.kind === "warn"){ data.cell.styles.fillColor = [246, 239, 222]; }
-          if(info.kind === "net"){
+          if(info.kind === "investment"){ data.cell.styles.fillColor = [236, 244, 238]; }
+          if(info.kind === "net" || info.kind === "investment-total"){
             data.cell.styles.fontStyle = "bold";
             data.cell.styles.fontSize = 11;
             const value = data.column.index === 1 ? info.dayValue : info.monthValue;
@@ -347,6 +595,48 @@
       doc.setTextColor(90, 90, 90);
       doc.text("Firma Cajero(a) / Operador", left + 35, signY + 5, { align: "center" });
       doc.text("Firma Encargado / Administrador", right - 35, signY + 5, { align: "center" });
+
+      if(includeInvestmentDetails){
+        doc.addPage();
+        doc.setTextColor(15, 20, 24);
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(15);
+        doc.text("Detalle de aportes de inversión", left, 20);
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(10);
+        doc.setTextColor(90, 90, 90);
+        doc.text(`Total vigente: ${investmentMoney(investmentContributions
+          .filter(item => item && !item.anulado)
+          .reduce((sum, item) => sum + (Number(item.monto) || 0), 0))}`, left, 27);
+        const contributionRows = [...investmentContributions]
+          .sort((a, b) => Number(b.fecha) - Number(a.fecha))
+          .map(item => [
+            localDateKey(item.fecha)
+              ? new Date(Number(item.fecha)).toLocaleDateString("es-CR")
+              : "Fecha no válida",
+            String(item.socioNombre || ""),
+            pdfMoney(item.monto),
+            String(item.descripcion || ""),
+            item.anulado ? "Anulado" : "Vigente"
+          ]);
+        doc.autoTable({
+          startY: 32,
+          margin: { left, right: left },
+          head: [["Fecha", "Socio", "Monto", "Descripción", "Estado"]],
+          body: contributionRows.length
+            ? contributionRows
+            : [[{ content: "Sin aportes registrados.", colSpan: 5, styles: { halign: "center", textColor: [120, 120, 120] } }]],
+          theme: "grid",
+          styles: { font: "helvetica", fontSize: 9, cellPadding: 2.8, overflow: "linebreak" },
+          headStyles: { fillColor: DARK, textColor: [255, 255, 255], fontStyle: "bold" },
+          columnStyles: { 0: { cellWidth: 24 }, 1: { cellWidth: 35 }, 2: { halign: "right", cellWidth: 32 }, 4: { cellWidth: 22 } },
+          didParseCell: data => {
+            if(data.section !== "body") return;
+            const row = contributionRows[data.row.index];
+            if(row && row[4] === "Anulado") data.cell.styles.textColor = [120, 120, 120];
+          }
+        });
+      }
 
       /* --- Detalle: ventas del turno --- */
       doc.addPage();
@@ -979,4 +1269,8 @@
   renderAll();
   window.addEventListener("vv:cloud-sync", renderAll);
   window.addEventListener("vv:cloud-status", renderAll);
+  window.addEventListener("vv:investment-contributions", renderAll);
+  window.addEventListener("storage", event => {
+    if(event.key === "vv_aportes_inversion") renderAll();
+  });
 })();
